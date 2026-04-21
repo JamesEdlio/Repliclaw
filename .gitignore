@@ -6,3 +6,8 @@ creds/
 runs/
 *.log
 .DS_Store
+
+# Local runtime
+registry.json
+templates/*/replica-kern-minimal/.kern/
+sse.log
