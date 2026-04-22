@@ -1,13 +1,6 @@
 node_modules/
-dist/
 .env
-.env.local
-creds/
-runs/
+/runs/
+audit-dev/
 *.log
 .DS_Store
-
-# Local runtime
-registry.json
-templates/*/replica-kern-minimal/.kern/
-sse.log
