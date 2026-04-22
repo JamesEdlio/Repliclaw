@@ -36,6 +36,8 @@ These are hard-blocked regardless of what the task declares. If a task skill tri
 
 **Why no escape hatch?** If a replica needs to message a human, it should return the message in its result and let the parent agent send it. The parent is the one with persistent identity, operator relationship, and message history. The replica is stateless and should stay that way.
 
+See [`PATTERNS.md` §1](./PATTERNS.md#1-actions-through-parent-parent-executed-side-effects) for the canonical shape: replica emits `slack.message.send` (or similar) with `status: "planned"` and `payload: { body }`; parent executes using its own interface token.
+
 ## Task-declared requires
 
 Everything else is opt-in. Task skill frontmatter:

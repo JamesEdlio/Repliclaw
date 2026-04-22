@@ -26,7 +26,8 @@
 
 /**
  * @typedef {Object} ResultContext
- * @property {(type: string, ref?: string, details?: object) => void} action
+ * @property {(type: string, ref?: string, details?: object) => void} action  - replica performed the action
+ * @property {(type: string, ref?: string, details?: object, payload?: object) => void} plan  - replica declares intent, parent will execute
  * @property {(type: string, message: string, opts?: {severity?: 'info'|'warn'|'error', details?: object}) => void} note
  * @property {(code: string, message: string, opts?: {retryable?: boolean, details?: object}) => void} error
  */
@@ -67,6 +68,21 @@ export async function run(opts) {
           severity: "warn",
         });
       }
+      actions.push(a);
+    },
+    plan(type, ref, details, payload) {
+      // Emit a parent-executed action. Replica did NOT perform this; parent will.
+      // Use for interface sends (slack.message.send, telegram.message.send) and
+      // for any action where `mode: "plan"` is in effect.
+      validateActionType(type);
+      const a = {
+        type,
+        ts: new Date().toISOString(),
+        status: "planned",
+        details: details || {},
+      };
+      if (ref !== undefined) a.ref = String(ref);
+      if (payload !== undefined) a.payload = payload;
       actions.push(a);
     },
     note(type, message, opts = {}) {

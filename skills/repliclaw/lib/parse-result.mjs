@@ -139,3 +139,67 @@ export function loadTaskOutputsSchema(taskSkillDir) {
   try { return JSON.parse(readFileSync(schemaPath, "utf-8")); }
   catch { return null; }
 }
+
+/**
+ * Parse task SKILL.md frontmatter into a structured object. Best-effort — does
+ * not fail on unknown keys. Recognizes:
+ *   name, version, description, repliclawEnvelopeVersion, requires, inputs,
+ *   outputs_schema, supports_plan_mode, outputs_files.
+ *
+ * `supports_plan_mode` and `outputs_files` are accepted today but not yet
+ * enforced at runtime — reserved for task skills to declare forward-compatibly.
+ *
+ * @param {string} taskSkillDir - directory containing SKILL.md
+ * @returns {object|null} parsed frontmatter fields, or null if no SKILL.md/frontmatter
+ */
+export function parseTaskFrontmatter(taskSkillDir) {
+  const skillPath = join(taskSkillDir, "SKILL.md");
+  if (!existsSync(skillPath)) return null;
+  const raw = readFileSync(skillPath, "utf-8");
+  const m = raw.match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return null;
+  const fm = m[1];
+
+  const out = {};
+  const scalar = (k) => {
+    const re = new RegExp(`^${k}:\\s*(.+)$`, "m");
+    const mm = fm.match(re);
+    if (!mm) return undefined;
+    return mm[1].trim().replace(/^["']|["']$/g, "");
+  };
+  const bool = (k) => {
+    const s = scalar(k);
+    if (s === undefined) return undefined;
+    return /^(true|yes|1)$/i.test(s);
+  };
+  const list = (k) => {
+    // supports "key: [a, b, c]" inline form and "key:\n  - a\n  - b" block form
+    const inline = new RegExp(`^${k}:\\s*\\[([^\\]]*)\\]\\s*$`, "m");
+    const mm1 = fm.match(inline);
+    if (mm1) return mm1[1].split(",").map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+    const block = new RegExp(`^${k}:\\s*\\n((?:\\s+-\\s+.+\\n?)+)`, "m");
+    const mm2 = fm.match(block);
+    if (mm2) return mm2[1].split("\n").map(l => l.replace(/^\s+-\s+/, "").trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+    return undefined;
+  };
+
+  const name = scalar("name");
+  const version = scalar("version");
+  const description = scalar("description");
+  const envelopeVersion = scalar("repliclawEnvelopeVersion");
+  const outputsSchema = scalar("outputs_schema");
+  const supportsPlanMode = bool("supports_plan_mode");
+  const requires = list("requires");
+  const outputsFiles = list("outputs_files");
+
+  if (name !== undefined) out.name = name;
+  if (version !== undefined) out.version = version;
+  if (description !== undefined) out.description = description;
+  if (envelopeVersion !== undefined) out.repliclawEnvelopeVersion = envelopeVersion;
+  if (outputsSchema !== undefined) out.outputs_schema = outputsSchema;
+  if (requires !== undefined) out.requires = requires;
+  if (supportsPlanMode !== undefined) out.supports_plan_mode = supportsPlanMode;
+  if (outputsFiles !== undefined) out.outputs_files = outputsFiles;
+
+  return out;
+}

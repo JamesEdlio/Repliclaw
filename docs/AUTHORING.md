@@ -15,10 +15,14 @@ tasks/my-task/
 name: my-task
 version: 0.1.0
 description: One sentence describing what this does.
+repliclawEnvelopeVersion: 0.2.0
 requires: []
 inputs: {}
 outputs: {}
 outputs_schema: ./schema.json
+# Optional forward-compat keys (see docs/PATTERNS.md):
+supports_plan_mode: false       # honor `inputs.mode: "plan"` for dry-runs
+outputs_files: []               # artifact globs copied back to parent on success
 ---
 
 # my-task

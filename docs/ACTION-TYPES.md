@@ -16,6 +16,13 @@ If you need a type that isn't here, add it in your task PR — don't invent sile
 
 Read-style verbs (`read`, `get`, `list`, `search`, `fetch`) MAY omit `details`. Anything else MUST include `details`.
 
+## Action `status`
+
+- `success` — replica performed the action successfully. (Default.)
+- `failed` — replica attempted and failed. `details` should explain.
+- `skipped` — replica deliberately did not perform (dry-run, idempotency guard hit, policy).
+- `planned` — replica is declaring intent; parent will execute. Used for parent-executed action types (Slack, anything gated by the credential hard-block) and for `mode: "plan"` runs. `details` is required; `payload` carries the content the parent needs to ship.
+
 ## Standard types
 
 ### Jira
@@ -69,12 +76,29 @@ Read-style verbs (`read`, `get`, `list`, `search`, `fetch`) MAY omit `details`. 
 | `sftp.file.fetch` | `{ remotePath, sizeBytes }` |
 | `sftp.file.put` | `{ remotePath, sizeBytes }` |
 
-### Slack
+### Slack (parent-executed)
 
-| type | required `details` |
-|------|--------------------|
-| `slack.message.send` | `{ channel, threadTs? }` |
-| `slack.message.read` | — |
+Slack action types are **parent-executed**. Replicas MUST NOT call Slack APIs directly — their scoped creds are stripped of `SLACK_*` by the runtime as a hard block. Instead, emit the action with `status: "planned"` and include `payload.body` (plus any blocks/attachments). The parent orchestrator reads the planned action from the envelope, posts it using its own interface token, and writes its own audit entry with `status: "success"` and the resulting message TS in `ref`.
+
+This preserves a clean property: a compromised task prompt cannot reach humans through Slack, because the replica physically cannot post.
+
+| type | required `details` | `payload` |
+|------|--------------------|-----------|
+| `slack.message.send` | `{ channel, threadTs? }` | `{ body, blocks?, attachments? }` |
+| `slack.dm.send` | `{ userId }` | `{ body, blocks? }` |
+| `slack.react` | `{ channel, messageTs, emoji }` | — |
+| `slack.message.read` | — | — (read-only, replica can do directly if it has a scoped read-only token — uncommon) |
+
+Example of a replica emitting a planned Slack post via the result helper:
+
+```js
+ctx.plan(
+  "slack.message.send",
+  "C0AH1SEB08G",
+  { channel: "C0AH1SEB08G" },
+  { body: "Ranger: new ticket SS-501 — PowerSchool SFTP" }
+);
+```
 
 ### Internal
 

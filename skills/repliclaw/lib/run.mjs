@@ -347,6 +347,13 @@ function writeAudit(patch) {
   const record = {
     runId,
     task: args.task,
+    taskMeta: {
+      name: taskSkillMeta.name ?? null,
+      version: taskSkillMeta.version ?? null,
+      repliclawEnvelopeVersion: taskSkillMeta.repliclawEnvelopeVersion ?? null,
+      supports_plan_mode: taskSkillMeta.supports_plan_mode === true || taskSkillMeta.supports_plan_mode === "true",
+      outputs_files: Array.isArray(taskSkillMeta.outputs_files) ? taskSkillMeta.outputs_files : [],
+    },
     inputs: inputsObj,
     startedAt,
     endedAt: patch.endedAt ?? null,

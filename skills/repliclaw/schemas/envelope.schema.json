@@ -82,8 +82,13 @@
         },
         "status": {
           "type": "string",
-          "enum": ["success", "failed", "skipped"],
-          "default": "success"
+          "enum": ["success", "failed", "skipped", "planned"],
+          "default": "success",
+          "description": "success=replica performed the action. failed=replica tried and failed (details should explain). skipped=deliberately not performed (e.g. dry-run, idempotency guard hit). planned=replica is declaring intent but did NOT execute; the parent is expected to execute (used for parent-executed action types like slack.message.send)."
+        },
+        "payload": {
+          "type": "object",
+          "description": "For status=planned only. The content the parent needs to execute the action (e.g. message body, email HTML, file bytes-ref). Kept separate from `details` so audit-replay stays compact: `details` is the addressable shape (channel, recipient, subject), `payload` is the thing being shipped."
         }
       },
       "allOf": [
@@ -96,6 +101,13 @@
             }
           },
           "then": { "required": ["details"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "planned" } }, "required": ["status"] },
+          "then": {
+            "description": "planned actions must carry enough info for the parent to execute.",
+            "required": ["details"]
+          }
         }
       ]
     },
