@@ -90,16 +90,30 @@ export function tryExtractResult(text) {
   return { kind: "incomplete" };
 }
 
+// Statuses for which the task's `data` payload is expected to be well-formed
+// enough to satisfy its outputs_schema. Error-ish statuses get a pass because
+// the task bailed before populating data, by design.
+const DATA_VALIDATED_STATUSES = new Set(["ok", "partial"]);
+
 /**
  * Validate a parsed envelope against the standard schema and (optionally) a
- * task-specific data schema.
+ * task-specific data schema plus a task-specific invariants function.
+ *
+ * Data-schema validation is only performed when `value.status` is "ok" or
+ * "partial". Error envelopes (error / timeout / declined / needs-input) are
+ * exempt because their data payload is empty/minimal by design.
+ *
+ * Invariants run only if the envelope + data schema both passed. They express
+ * cross-field or stateful checks JSON Schema can't — e.g. "count == len(list)".
  *
  * @param {object} value
  * @param {object} [opts]
  * @param {object} [opts.dataSchema] - optional JSON Schema to validate `data` against
- * @returns {{ok:true} | {ok:false, errors:Array<{path:string,message:string}>}}
+ * @param {(data:object) => Array<{path?:string,message:string}> | Promise<Array<{path?:string,message:string}>>} [opts.invariants]
+ *   - optional task-owned function. Return an array of errors (empty = pass).
+ * @returns {Promise<{ok:true} | {ok:false, errors:Array<{path:string,message:string}>}>}
  */
-export function validateEnvelope(value, opts = {}) {
+export async function validateEnvelope(value, opts = {}) {
   const v = envelopeValidator();
   const errors = [];
   if (!v(value)) {
@@ -107,7 +121,11 @@ export function validateEnvelope(value, opts = {}) {
       errors.push({ path: e.instancePath || "/", message: `${e.message}${e.params ? " " + JSON.stringify(e.params) : ""}` });
     }
   }
-  if (opts.dataSchema) {
+
+  const status = value?.status;
+  const shouldValidateData = DATA_VALIDATED_STATUSES.has(status);
+
+  if (opts.dataSchema && shouldValidateData) {
     const dv = ajv().compile(opts.dataSchema);
     if (!dv(value?.data ?? {})) {
       for (const e of dv.errors || []) {
@@ -115,6 +133,27 @@ export function validateEnvelope(value, opts = {}) {
       }
     }
   }
+
+  // Only run invariants if nothing has failed so far AND data is in scope.
+  // Invariants assume a well-typed payload; running them over a schema-invalid
+  // blob would just produce noise.
+  if (opts.invariants && shouldValidateData && errors.length === 0) {
+    try {
+      const result = await opts.invariants(value?.data ?? {});
+      if (Array.isArray(result)) {
+        for (const e of result) {
+          if (!e) continue;
+          errors.push({
+            path: e.path ? `/data${e.path}` : "/data",
+            message: `invariant: ${e.message || "failed"}`,
+          });
+        }
+      }
+    } catch (err) {
+      errors.push({ path: "/data", message: `invariant check threw: ${err?.message || String(err)}` });
+    }
+  }
+
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
 }
 
@@ -138,6 +177,44 @@ export function loadTaskOutputsSchema(taskSkillDir) {
   if (!existsSync(schemaPath)) return null;
   try { return JSON.parse(readFileSync(schemaPath, "utf-8")); }
   catch { return null; }
+}
+
+/**
+ * Load a task skill's invariants function if declared.
+ *
+ * Looks for an `invariants:` key in SKILL.md frontmatter pointing to a relative
+ * ESM module path. The module must export a `check(data)` function that
+ * returns (or resolves to) an array of `{path?, message}` error objects —
+ * empty array = invariants pass.
+ *
+ * Invariants complement JSON Schema for cross-field constraints schema can't
+ * express (count == len(list), conditional requireds across branches, etc.).
+ *
+ * @param {string} taskSkillDir - directory containing SKILL.md
+ * @returns {Promise<((data:object) => Array<{path?:string,message:string}> | Promise<Array<{path?:string,message:string}>>) | null>}
+ */
+export async function loadTaskInvariants(taskSkillDir) {
+  const skillPath = join(taskSkillDir, "SKILL.md");
+  if (!existsSync(skillPath)) return null;
+  const raw = readFileSync(skillPath, "utf-8");
+  const m = raw.match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return null;
+  const fm = m[1];
+  const mm = fm.match(/^invariants:\s*(.+)$/m);
+  if (!mm) return null;
+  const rel = mm[1].trim().replace(/^["']|["']$/g, "");
+  const modPath = join(taskSkillDir, rel);
+  if (!existsSync(modPath)) return null;
+  try {
+    // Import via file URL for ESM compatibility.
+    const url = new URL(`file://${modPath}`).href;
+    const mod = await import(url);
+    if (typeof mod.check === "function") return mod.check;
+    if (typeof mod.default === "function") return mod.default;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -188,6 +265,7 @@ export function parseTaskFrontmatter(taskSkillDir) {
   const description = scalar("description");
   const envelopeVersion = scalar("repliclawEnvelopeVersion");
   const outputsSchema = scalar("outputs_schema");
+  const invariants = scalar("invariants");
   const supportsPlanMode = bool("supports_plan_mode");
   const requires = list("requires");
   const outputsFiles = list("outputs_files");
@@ -197,6 +275,7 @@ export function parseTaskFrontmatter(taskSkillDir) {
   if (description !== undefined) out.description = description;
   if (envelopeVersion !== undefined) out.repliclawEnvelopeVersion = envelopeVersion;
   if (outputsSchema !== undefined) out.outputs_schema = outputsSchema;
+  if (invariants !== undefined) out.invariants = invariants;
   if (requires !== undefined) out.requires = requires;
   if (supportsPlanMode !== undefined) out.supports_plan_mode = supportsPlanMode;
   if (outputsFiles !== undefined) out.outputs_files = outputsFiles;

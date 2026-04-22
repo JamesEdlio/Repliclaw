@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { scopeCreds, STRIPPED_PREFIXES } from "./scope-creds.mjs";
-import { tryExtractResult, validateEnvelope, loadTaskOutputsSchema } from "./parse-result.mjs";
+import { tryExtractResult, validateEnvelope, loadTaskOutputsSchema, loadTaskInvariants } from "./parse-result.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -212,7 +212,11 @@ let validationErrors = null;
 if (result) {
   // Validate envelope (and task data schema if declared)
   const dataSchema = loadTaskOutputsSchema(taskSkillDir);
-  const v = validateEnvelope(result, dataSchema ? { dataSchema } : {});
+  const invariants = await loadTaskInvariants(taskSkillDir);
+  const valOpts = {};
+  if (dataSchema) valOpts.dataSchema = dataSchema;
+  if (invariants) valOpts.invariants = invariants;
+  const v = await validateEnvelope(result, valOpts);
   if (!v.ok) {
     validationErrors = v.errors;
     status = "error";

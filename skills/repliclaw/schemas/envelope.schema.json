@@ -54,7 +54,7 @@
     },
     "data": {
       "type": "object",
-      "description": "Task-owned freeform payload. Validated against the task's own outputs_schema."
+      "description": "Task-owned freeform payload. Validated against the task's own outputs_schema ONLY when status is 'ok' or 'partial'. Error-ish statuses (error / timeout / declined / needs-input) skip data validation — their data is empty/minimal by design since the task didn't complete normally. Invariants (task-declared cross-field checks) run under the same gate."
     }
   },
   "definitions": {

@@ -55,7 +55,7 @@ Every task returns a **standard envelope** (enforced by Repliclaw) with a task-o
 }
 ```
 
-The envelope is validated against [`envelope.schema.json`](../skills/repliclaw/schemas/envelope.schema.json). The `data` payload is validated against the task's own `outputs_schema` (if declared). Validation happens in the parent after the replica exits — a bad envelope is recorded as `status: error` with `validationErrors` in the audit log, and the run is returned to the caller as an error.
+The envelope is validated against [`envelope.schema.json`](../skills/repliclaw/schemas/envelope.schema.json). The `data` payload is validated against the task's own `outputs_schema` (if declared) — but only when the envelope's `status` is `ok` or `partial`. Error-ish statuses skip data validation by design. Tasks can also declare cross-field `invariants` for constraints schema can't express. Validation happens in the parent after the replica exits — a bad envelope is recorded as `status: error` with `validationErrors` in the audit log, and the run is returned to the caller as an error.
 
 ## Frontmatter contract
 
@@ -92,6 +92,30 @@ Human-readable shape description. Not currently enforced by Repliclaw itself —
 ### `outputs_schema` (string, optional but recommended)
 
 Relative path to a JSON Schema file that validates the `data` payload inside the envelope. Strongly recommended — without it you get envelope validation but no check on the task's own semantics.
+
+**Data validation is status-gated.** The runtime validates `data` against `outputs_schema` only when `status` is `ok` or `partial`. Error-ish statuses (`error`, `timeout`, `declined`, `needs-input`) skip data validation by design — the task didn't complete normally, so its `data` is expected to be empty or minimal. This lets you emit `{ data: {} }` on error paths without having to satisfy every required field in your schema.
+
+### `invariants` (string, optional)
+
+Relative path to an ESM module exporting `check(data)`, for cross-field constraints JSON Schema can't cleanly express. Examples: `count === items.length`, "if `classification === X` then field `Y` is required", foreign-key consistency between two sections of `data`.
+
+```javascript
+// tasks/my-task/invariants.mjs
+export function check(data) {
+  const errors = [];
+  if (data.ticketCount !== (data.tickets?.length ?? 0)) {
+    errors.push({
+      path: "/ticketCount",
+      message: `ticketCount (${data.ticketCount}) must equal tickets.length (${data.tickets?.length ?? 0})`,
+    });
+  }
+  return errors; // empty array = pass
+}
+```
+
+Return an array of `{ path?, message }` objects. Empty array = pass. The runtime prefixes `path` with `/data`, so write paths relative to the data payload (e.g. `/tickets/0/key`).
+
+Invariants run **after** envelope + data-schema validation pass, and only when data validation is in scope (see status gating above). Exceptions thrown by the invariant function are caught and recorded as validation errors — your invariant doesn't need to be defensive against malformed data; the schema already filtered it.
 
 ## Writing the playbook body
 

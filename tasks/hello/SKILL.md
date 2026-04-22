@@ -1,7 +1,8 @@
 ---
 name: hello
-version: 0.2.0
+version: 0.3.0
 description: Verify the Repliclaw spawn/seed/result loop end-to-end. Emits a greeting envelope and terminates.
+repliclawEnvelopeVersion: 0.2.0
 requires: []
 inputs:
   name:
@@ -11,12 +12,20 @@ inputs:
 outputs:
   greeting:
     type: string
+  name:
+    type: string
 outputs_schema: ./schema.json
+invariants: ./invariants.mjs
 ---
 
 # hello
 
 The simplest possible task skill. Used to validate that a replica can be spawned, seeded with a task, execute it, emit a well-formed Repliclaw result envelope, and terminate cleanly.
+
+Also exercises two framework features beyond the bare envelope:
+
+- **`outputs_schema`** — JSON Schema validation of the `data` payload.
+- **`invariants`** — cross-field check JSON Schema can't express: the emitted `greeting` must contain `name`.
 
 ## Steps
 
@@ -39,7 +48,7 @@ Replace `<NAME>` with the input name and `<RUN_ID>` with the value of `REPLICLAW
 <<RESULT>>{
   "status": "ok",
   "taskName": "hello",
-  "taskVersion": "0.2.0",
+  "taskVersion": "0.3.0",
   "runId": "<RUN_ID>",
   "startedAt": "<ISO-8601>",
   "finishedAt": "<ISO-8601>",
@@ -47,7 +56,7 @@ Replace `<NAME>` with the input name and `<RUN_ID>` with the value of `REPLICLAW
   "actions": [],
   "notes": [],
   "errors": [],
-  "data": { "greeting": "hello, <NAME>" }
+  "data": { "greeting": "hello, <NAME>", "name": "<NAME>" }
 }
 ```
 
