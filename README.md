@@ -50,8 +50,7 @@ repliclaw/
 │       └── templates/
 │           └── replica-workspace/      ← AGENTS.md + IDENTITY.md for replicas
 ├── tasks/                              ← example/reference task skills
-│   ├── hello/
-│   └── app-sftp-case/                  ← (placeholder — coming)
+│   └── hello/                          ← smoke test (rename/copy as the starting point for your own task)
 └── docs/
     ├── AUTHORING.md                    ← how to write a task skill
     ├── ACTION-TYPES.md                 ← canonical action type vocabulary
@@ -93,7 +92,7 @@ Every task returns a validated two-layer envelope: a standard outer shell (statu
 ```json
 {
   "status": "ok | error | partial | timeout | declined | needs-input",
-  "taskName": "app-sftp-case",
+  "taskName": "my-task",
   "taskVersion": "0.1.0",
   "runId": "...",
   "startedAt": "...",

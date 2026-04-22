@@ -117,21 +117,21 @@ For tasks with real side-effects, ship a small helper (Node, Python, whatever) t
 import { run } from "../../skills/repliclaw/lib/result.mjs";
 
 await run({
-  taskName: "app-sftp-case",
+  taskName: "my-task",
   taskVersion: "0.1.0",
   inputs,
   async work(ctx) {
-    const issue = await jira.get(inputs.ticketId);
-    ctx.action("jira.issue.read", inputs.ticketId);
+    const record = await someApi.get(inputs.recordId);
+    ctx.action("someapi.record.read", inputs.recordId);
 
-    if (!userExists) {
-      await filemage.createUser({ ... });
-      ctx.action("filemage.user.create", username, {
-        username, endpointId, accountType: "sftp"
+    if (record.needsUpdate) {
+      await someApi.update(record.id, { status: "processed" });
+      ctx.action("someapi.record.update", record.id, {
+        status: "processed"
       });
     }
 
-    return { classification: "new-setup", nextAction: "await-first-upload" };
+    return { outcome: "processed", recordId: record.id };
   }
 });
 ```
@@ -166,3 +166,33 @@ node skills/repliclaw/lib/run.mjs \
 ```
 
 `--keep-workspace` leaves the replica's directory at `~/.repliclaw/runs/<runId>/workspace` so you can inspect what it saw. Drop the flag for normal runs.
+
+## Editing an existing skill
+
+Task skills are versioned, schema-validated contracts. Treat changes like you would an API change.
+
+**1. Bump `version` in SKILL.md frontmatter.**
+- Patch (`0.1.0` → `0.1.1`) for phrasing, internal logic, non-contract tweaks.
+- Minor (`0.1.0` → `0.2.0`) for additive changes to `inputs`, `outputs_schema`, or action types used.
+- Major (`0.1.0` → `1.0.0`) for breaking changes — required input added, schema field removed/renamed, status enum tightened. Orchestrators use `taskVersion` in the envelope to reason about replay compatibility; don't lie about it.
+
+**2. Update `outputs_schema` in lockstep with the `data` payload.**
+If the task now returns a new field, add it to the schema. If the task stops returning a field, remove it (or mark it optional) in the schema. A silent drift here means validation will fail at runtime with no useful error for the caller.
+
+**3. Keep action types canonical.**
+New external call? Check [`ACTION-TYPES.md`](./ACTION-TYPES.md). If the type isn't there, open a PR adding it to the registry — don't inline-invent `myservice.thing.frob` in a task.
+
+**4. Don't widen `requires` casually.**
+Every new cred listed is a new blast radius. If the task needs Gmail now but didn't before, that's a contract change worth calling out in the version bump.
+
+**5. Re-run validation.**
+At minimum, spawn the task once end-to-end with `--keep-workspace` and confirm:
+- Envelope validates (check the audit file's `validationErrors: null`).
+- `scopedEnvKeys` matches the updated `requires` list.
+- No actions reference unknown types.
+
+Any task-specific test harness (e.g. fixture-based schema validation) should be re-run too — tasks are encouraged to keep a `tests/` directory with AJV-validated fixtures for their major execution branches.
+
+**6. Idempotency.**
+If the task mutates external state, it should be safely re-runnable. Common patterns: check-before-create (Jira comment marker, 1Password item title lookup, FileMage username uniqueness). Document the idempotency strategy in the SKILL body so future editors don't regress it.
+

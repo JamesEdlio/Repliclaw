@@ -7,7 +7,7 @@ inputs:
   task:
     type: string
     required: true
-    description: Name of the task skill the replica should run (must be discoverable on disk, e.g. "app-sftp-case", "hello").
+    description: Name of the task skill the replica should run (must be discoverable on disk, e.g. "hello", "my-task").
   inputs:
     type: object
     required: true
@@ -129,7 +129,7 @@ When the replica emits `<<RESULT>>`, the spawn helper validates the envelope, th
 ```json
 {
   "runId": "2026-04-22T18-40-00_abc123",
-  "task": "app-sftp-case",
+  "task": "my-task",
   "inputs": { "...": "..." },
   "startedAt": "2026-04-22T18:40:00Z",
   "endedAt":   "2026-04-22T18:40:42Z",

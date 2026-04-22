@@ -8,14 +8,14 @@
 //   import { run } from "./repliclaw-result.mjs";
 //
 //   await run({
-//     taskName: "app-sftp-case",
+//     taskName: "my-task",
 //     taskVersion: "0.1.0",
 //     inputs,
 //     async work(ctx) {
-//       const issue = await jira.get(inputs.ticketId);
-//       ctx.action("jira.issue.read", inputs.ticketId);
+//       const record = await api.get(inputs.recordId);
+//       ctx.action("api.record.read", inputs.recordId);
 //       // ... do stuff, calling ctx.action / ctx.note / ctx.error ...
-//       return { classification: "new-setup", resolution: "first-contact-sent" };
+//       return { outcome: "processed", recordId: record.id };
 //     }
 //   });
 //
