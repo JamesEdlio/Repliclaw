@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://repliclaw.dev/schemas/envelope.schema.json",
+  "title": "Repliclaw Result Envelope",
+  "description": "Standard outer envelope every task skill must emit via <<RESULT>>. The `data` field is task-owned and validated separately against the task's own schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "taskName", "taskVersion", "runId", "startedAt", "finishedAt", "inputs", "actions", "notes", "errors", "data"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "error", "partial", "timeout", "declined", "needs-input"],
+      "description": "Outcome class. ok=fully succeeded. error=hard failure. partial=some actions succeeded, some failed. timeout=ran out of time. declined=replica refused (policy/safety). needs-input=did everything possible, blocked on a human/parent decision."
+    },
+    "taskName": {
+      "type": "string",
+      "description": "Pulled from task SKILL.md frontmatter `name`. Echoed for audit replay.",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "taskVersion": {
+      "type": "string",
+      "description": "Pulled from task SKILL.md frontmatter `version`. Lets orchestrators reason about contract evolution."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Unique ID for this run. Matches audit log filename."
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Echo of inputs passed to the task. For reproducibility."
+    },
+    "actions": {
+      "type": "array",
+      "description": "Every external side-effect the replica took. The audit gold.",
+      "items": { "$ref": "#/definitions/action" }
+    },
+    "notes": {
+      "type": "array",
+      "description": "Observations the replica wants to flag for the parent/orchestrator that aren't side-effects. Machine-readable hints.",
+      "items": { "$ref": "#/definitions/note" }
+    },
+    "errors": {
+      "type": "array",
+      "description": "Structured errors. Empty array for status=ok.",
+      "items": { "$ref": "#/definitions/error" }
+    },
+    "data": {
+      "type": "object",
+      "description": "Task-owned freeform payload. Validated against the task's own outputs_schema."
+    }
+  },
+  "definitions": {
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ts"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Action type in `<service>.<resource>.<verb>` form (e.g. jira.comment.create, filemage.user.create, gmail.message.send, op.item.create).",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9]+){1,3}$"
+        },
+        "ref": {
+          "type": "string",
+          "description": "External ID or reference for the resource touched (e.g. SS-1234, msg-id, user-id). Optional for actions without a meaningful ref."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "details": {
+          "type": "object",
+          "description": "Action-type-specific payload. Required for any mutating action (anything other than read/get/list)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["success", "failed", "skipped"],
+          "default": "success"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "not": { "pattern": "\\.(read|get|list|search|fetch)$" }
+              }
+            }
+          },
+          "then": { "required": ["details"] }
+        }
+      ]
+    },
+    "note": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "message"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Free-form category (e.g. flag, observation, suggestion).",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warn", "error"],
+          "default": "info"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "at"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Stable error code (e.g. filemage.api.4xx, gmail.send.quota, jira.transition.invalid).",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9]+){0,4}$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

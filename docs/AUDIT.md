@@ -13,8 +13,9 @@ Every Repliclaw run writes a single JSON file to the audit directory, named `<ru
   "endedAt":      "2026-04-22T18:40:07.560Z",
   "durationMs":   6326,
   "status":       "ok",
-  "result":       {"status": "ok", "data": {...}},
+  "result":       { "...validated envelope..." },
   "error":        null,
+  "validationErrors": null,
   "replicaWorkspace": "/home/.../.repliclaw/runs/2026-04-22T18-40-01_019a76/workspace",
   "stdoutTail":   "...last 4k of replica kern-ai stdout...",
   "stderrTail":   "...last 4k of replica kern-ai stderr...",
@@ -33,9 +34,10 @@ Every Repliclaw run writes a single JSON file to the audit directory, named `<ru
 | `startedAt` | ISO-8601 | When `run.mjs` started, not when the replica opened its port. |
 | `endedAt` | ISO-8601 | When `run.mjs` finished cleanup. |
 | `durationMs` | number | endedAt - startedAt in ms. |
-| `status` | string | `ok` \| `error` \| `timeout`. Task-level errors also come through as `error`. |
-| `result` | object\|null | Parsed `<<RESULT>>` payload from the replica, if any. |
+| `status` | string | `ok` \| `error` \| `partial` \| `timeout` \| `declined` \| `needs-input`. Derived from the envelope after validation. |
+| `result` | object\|null | The validated envelope from the replica. If validation failed, this holds `{status:"error", reason:"envelope validation failed", validationErrors, raw}`. |
 | `error` | string\|null | Spawn-level error if the replica never produced a result. |
+| `validationErrors` | array\|null | AJV validation errors if the envelope was malformed. `null` on success. |
 | `replicaWorkspace` | string | Path to the replica's workspace on disk. Deleted after run unless `--keep-workspace`. |
 | `stdoutTail` | string | Last 4k bytes of replica `kern-ai` stdout. Useful for debugging spawn issues. |
 | `stderrTail` | string | Last 4k bytes of replica `kern-ai` stderr. |
@@ -44,9 +46,12 @@ Every Repliclaw run writes a single JSON file to the audit directory, named `<ru
 
 ## Status values
 
-- **`ok`** — Replica emitted `<<RESULT>>` with `status:"ok"`.
-- **`error`** — Either the replica emitted `<<RESULT>>` with `status:"error"`, or the spawn failed, or the result JSON was malformed.
+- **`ok`** — Replica emitted a valid envelope with `status:"ok"`.
+- **`partial`** — Some actions succeeded, some failed. Inspect `result.actions[].status` and `result.errors[]`.
+- **`error`** — Envelope reported error, or validation failed, or spawn failed, or the result JSON was malformed.
 - **`timeout`** — Replica never emitted a result before `--timeout` expired.
+- **`declined`** — Replica refused to proceed (policy/safety guard in the task playbook).
+- **`needs-input`** — Replica did everything it could and is blocked on a human/parent decision.
 
 ## What's NOT in the audit log
 

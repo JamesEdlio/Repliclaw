@@ -43,7 +43,10 @@ repliclaw/
 │       ├── lib/
 │       │   ├── run.mjs                 ← the helper your agent invokes
 │       │   ├── scope-creds.mjs         ← cred-scoping enforcement
-│       │   └── parse-result.mjs        ← streaming JSON extractor
+│       │   ├── parse-result.mjs        ← streaming JSON extract + AJV validation
+│       │   └── result.mjs              ← helper for task scripts (recordAction/Note/Error/emit)
+│       ├── schemas/
+│       │   └── envelope.schema.json    ← canonical result envelope
 │       └── templates/
 │           └── replica-workspace/      ← AGENTS.md + IDENTITY.md for replicas
 ├── tasks/                              ← example/reference task skills
@@ -51,6 +54,7 @@ repliclaw/
 │   └── app-sftp-case/                  ← (placeholder — coming)
 └── docs/
     ├── AUTHORING.md                    ← how to write a task skill
+    ├── ACTION-TYPES.md                 ← canonical action type vocabulary
     ├── CREDENTIALS.md                  ← cred-scoping contract
     └── AUDIT.md                        ← audit log schema
 ```
@@ -77,10 +81,34 @@ node skills/repliclaw/lib/run.mjs \
 Output:
 
 ```json
-{"runId":"2026-04-22T18-40-01_019a76","status":"ok","result":{"status":"ok","data":{"greeting":"hello, world"}},"auditPath":"/tmp/audit/..."}
+{"runId":"...","status":"ok","result":{"status":"ok","taskName":"hello","taskVersion":"0.2.0","runId":"...","startedAt":"...","finishedAt":"...","inputs":{"name":"world"},"actions":[],"notes":[],"errors":[],"data":{"greeting":"hello, world"}},"auditPath":"/tmp/audit/..."}
 ```
 
 Total time: ~6s (replica boot is ~3s, model turn ~3s).
+
+## The result envelope
+
+Every task returns a validated two-layer envelope: a standard outer shell (status, taskName, taskVersion, runId, timing, actions, notes, errors) wrapping a task-owned `data` payload. The outer shell is enforced by Repliclaw against a JSON Schema; the `data` payload is validated against the task's own `outputs_schema` if declared.
+
+```json
+{
+  "status": "ok | error | partial | timeout | declined | needs-input",
+  "taskName": "app-sftp-case",
+  "taskVersion": "0.1.0",
+  "runId": "...",
+  "startedAt": "...",
+  "finishedAt": "...",
+  "inputs":  { "...": "echoed" },
+  "actions": [ { "type": "jira.comment.create", "ref": "SS-1234", "ts": "...", "details": { "body": "..." } } ],
+  "notes":   [ { "type": "flag", "message": "second domain observed" } ],
+  "errors":  [],
+  "data":    { "...": "task-shaped" }
+}
+```
+
+This means **every audit log across every task is queryable the same way.** "Show me every `gmail.message.send` from replicas in the last week" works across the whole fleet.
+
+See [`docs/AUTHORING.md`](./docs/AUTHORING.md) for how to write a task and [`docs/ACTION-TYPES.md`](./docs/ACTION-TYPES.md) for the canonical action vocabulary.
 
 ## Using it from an agent
 
@@ -90,29 +118,7 @@ Any task skill in this repo's `tasks/` directory — or in your agent's own skil
 
 ## Writing a task skill
 
-A task skill is just a directory with a `SKILL.md` containing frontmatter:
-
-```markdown
----
-name: my-task
-description: ...
-requires:
-  - JIRA_EMAIL
-  - JIRA_API_TOKEN
-inputs:
-  ticketId: { type: string, required: true }
-outputs:
-  classification: { type: string }
----
-
-# my-task
-
-Playbook body. The replica reads this and executes.
-Ends with:
-`<<RESULT>>{"status":"ok","data":{"classification":"..."}}`
-```
-
-See `tasks/hello/SKILL.md` for the minimal template. See `docs/AUTHORING.md` for the full contract.
+A task skill is a directory with a `SKILL.md` plus an optional `schema.json` that validates the `data` payload. See [`tasks/hello/`](./tasks/hello/) for the minimal template and [`docs/AUTHORING.md`](./docs/AUTHORING.md) for the full contract (envelope, helpers, action vocabulary, cred-scoping, testing loop).
 
 ## Status
 

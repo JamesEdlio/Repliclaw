@@ -1,5 +1,6 @@
 ---
 name: repliclaw
+version: 0.2.0
 description: Spawn a disposable replica of yourself to run a single task skill to completion, then terminate. Returns the replica's result and audit log. Use when a task needs isolated execution (scoped creds, clean context, long-running), or when running multiple similar tasks in parallel.
 requires: []
 inputs:
@@ -73,9 +74,38 @@ The replica's first user message is the seed prompt:
 [task]
 Run skill: <task-name>
 Inputs: <inputs-json>
+Run ID: <runId>
 
-When complete, output exactly one line starting with <<RESULT>> followed by JSON, then stop.
+Your skill file is at skills/<task-name>/SKILL.md. Read it carefully and follow it exactly.
+
+When complete, emit exactly one line of the form:
+  <<RESULT>>{...envelope...}
+where the envelope conforms to the standard Repliclaw envelope schema. Then stop.
 ```
+
+## The result envelope (two-layer contract)
+
+Every task returns a standard envelope validated against [`schemas/envelope.schema.json`](./schemas/envelope.schema.json). The envelope's `data` field is task-owned and validated against the task's `outputs_schema` if one is declared.
+
+```json
+{
+  "status":        "ok | error | partial | timeout | declined | needs-input",
+  "taskName":      "<from SKILL.md>",
+  "taskVersion":   "<from SKILL.md>",
+  "runId":         "<same runId the parent passed in>",
+  "startedAt":     "ISO-8601",
+  "finishedAt":    "ISO-8601",
+  "inputs":        { "...": "echoed" },
+  "actions":       [ { "type": "jira.comment.create", "ref": "SS-1", "ts": "...", "details": { "body": "..." } } ],
+  "notes":         [ { "type": "flag", "message": "...", "severity": "info" } ],
+  "errors":        [ { "code": "x.y.z", "message": "...", "retryable": false, "at": "..." } ],
+  "data":          { /* task-shaped */ }
+}
+```
+
+Validation happens in the parent after the replica exits. A malformed envelope becomes `status: error` in the audit, with structured `validationErrors`. Tasks are strongly encouraged to ship a helper that uses [`lib/result.mjs`](./lib/result.mjs) so they can't emit an invalid envelope by accident.
+
+Canonical action type vocabulary: see [`docs/ACTION-TYPES.md`](../../docs/ACTION-TYPES.md).
 
 ## Credential scoping
 
@@ -94,7 +124,7 @@ The cred-scoping logic lives in `lib/scope-creds.mjs` and is the single enforcem
 
 ## Audit logs
 
-When the replica emits `<<RESULT>>`, the spawn helper writes an audit record to `{auditDir}/<runId>.json`:
+When the replica emits `<<RESULT>>`, the spawn helper validates the envelope, then writes an audit record to `{auditDir}/<runId>.json`:
 
 ```json
 {
@@ -105,12 +135,17 @@ When the replica emits `<<RESULT>>`, the spawn helper writes an audit record to 
   "endedAt":   "2026-04-22T18:40:42Z",
   "durationMs": 42101,
   "status": "ok",
-  "result": { "...": "..." },
+  "result": { "...the validated envelope..." },
+  "validationErrors": null,
   "replicaWorkspace": "/home/.../runs/.../workspace",
   "stdoutTail": "last 4k of replica stdout",
-  "stderrTail": "last 4k of replica stderr"
+  "stderrTail": "last 4k of replica stderr",
+  "scopedEnvKeys": ["JIRA_EMAIL", "JIRA_API_TOKEN", "FILEMAGE_API_KEY"],
+  "strippedPrefixes": ["SLACK_", "TELEGRAM_", "MATRIX_", "DISCORD_"]
 }
 ```
+
+If envelope validation fails, `status` is `error`, `validationErrors` contains the schema errors, and `result.raw` contains whatever the replica emitted so you can debug.
 
 Parent is responsible for moving these to durable storage (a git repo, S3, wherever). Repliclaw doesn't commit anything on your behalf.
 

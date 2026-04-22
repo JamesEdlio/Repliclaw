@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { scopeCreds, STRIPPED_PREFIXES } from "./scope-creds.mjs";
-import { tryExtractResult } from "./parse-result.mjs";
+import { tryExtractResult, validateEnvelope, loadTaskOutputsSchema } from "./parse-result.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -87,6 +87,8 @@ const childEnv = {
   ...scopedEnv,
   // Replica-specific
   KERN_NAME: `replica-${runId}`,
+  REPLICLAW_RUN_ID: runId,
+  REPLICLAW_TASK: args.task,
 };
 // Never inherit parent auth token — child must generate its own.
 delete childEnv.KERN_AUTH_TOKEN;
@@ -129,8 +131,13 @@ const seedText = [
   "[task]",
   `Run skill: ${args.task}`,
   `Inputs: ${JSON.stringify(inputsObj)}`,
+  `Run ID: ${runId} (use this as the runId field in your envelope)`,
   "",
-  "When complete, output exactly one line starting with <<RESULT>> followed by JSON, then stop. Do not await further input. Do not add commentary after the result marker.",
+  "Your skill file is at skills/" + args.task + "/SKILL.md. Read it carefully and follow it exactly.",
+  "",
+  "When complete, emit exactly one line of the form:",
+  "  <<RESULT>>{...envelope...}",
+  "where {...envelope...} is the standard Repliclaw result envelope as defined by the skill. The envelope MUST include all required fields (status, taskName, taskVersion, runId, startedAt, finishedAt, inputs, actions, notes, errors, data) per the schema. Then stop. Do not await further input. Do not add commentary after the result marker.",
 ].join("\n");
 
 try {
@@ -201,9 +208,24 @@ await terminate(child);
 const endedAt = new Date().toISOString();
 
 let status, auditResult;
+let validationErrors = null;
 if (result) {
-  status = typeof result === "object" && result !== null && result.status === "error" ? "error" : "ok";
-  auditResult = result;
+  // Validate envelope (and task data schema if declared)
+  const dataSchema = loadTaskOutputsSchema(taskSkillDir);
+  const v = validateEnvelope(result, dataSchema ? { dataSchema } : {});
+  if (!v.ok) {
+    validationErrors = v.errors;
+    status = "error";
+    auditResult = {
+      status: "error",
+      reason: "envelope validation failed",
+      validationErrors: v.errors,
+      raw: result,
+    };
+  } else {
+    status = typeof result === "object" && result !== null && result.status === "error" ? "error" : (result.status || "ok");
+    auditResult = result;
+  }
 } else if (errorReason) {
   status = "error";
   auditResult = { status: "error", reason: errorReason };
@@ -216,6 +238,7 @@ writeAudit({
   status,
   result: auditResult,
   endedAt,
+  validationErrors,
 });
 cleanupWorkspace();
 printResult({ runId, status, result: auditResult, auditPath });
@@ -331,6 +354,7 @@ function writeAudit(patch) {
     status: patch.status,
     result: patch.result ?? null,
     error: patch.error ?? null,
+    validationErrors: patch.validationErrors ?? null,
     replicaWorkspace: workspaceDir,
     stdoutTail: stdoutBuf.slice(-4096),
     stderrTail: stderrBuf.slice(-4096),
