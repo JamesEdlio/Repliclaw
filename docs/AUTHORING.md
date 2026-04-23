@@ -16,6 +16,8 @@ name: my-task
 version: 0.1.0
 description: One sentence describing what this does.
 repliclawEnvelopeVersion: 0.2.0
+runtimes:                       # which runtimes you've validated against
+  - kern                        # (see docs/RUNTIMES.md). Default: [kern]
 requires: []
 inputs: {}
 outputs: {}
@@ -23,6 +25,8 @@ outputs_schema: ./schema.json
 # Optional forward-compat keys (see docs/PATTERNS.md):
 supports_plan_mode: false       # honor `inputs.mode: "plan"` for dry-runs
 outputs_files: []               # artifact globs copied back to parent on success
+# Required only if 'openclaw' is in runtimes:
+openclawAgent: ""               # openclaw agent id whose config governs the replica
 ---
 
 # my-task

@@ -3,6 +3,8 @@ name: hello
 version: 0.3.0
 description: Verify the Repliclaw spawn/seed/result loop end-to-end. Emits a greeting envelope and terminates.
 repliclawEnvelopeVersion: 0.2.0
+runtimes:
+  - kern
 requires: []
 inputs:
   name:

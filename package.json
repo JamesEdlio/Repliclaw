@@ -6,7 +6,7 @@
   "repository": "github:JamesEdlio/Repliclaw",
   "license": "MIT",
   "scripts": {
-    "test": "node tests/run.mjs"
+    "test": "node tests/run.mjs && node --test tests/parse-result.test.mjs tests/runtimes.test.mjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",

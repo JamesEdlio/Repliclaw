@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Repliclaw run helper.
-// Spawns a disposable kern replica, seeds it with a task skill, waits for
-// <<RESULT>>, writes an audit log, and terminates.
+// Spawns a disposable replica via a runtime adapter (kern / openclaw / ...),
+// seeds it with a task skill, waits for <<RESULT>>, writes an audit log,
+// and terminates. Runtime-agnostic — all runtime-specific plumbing lives
+// behind the adapter interface in lib/runtimes/.
 //
 // Exit codes:
 //   0 = spawn + run completed (task itself may have returned status:error, still exit 0)
@@ -9,14 +11,14 @@
 //   2 = spawn failure (replica never came up)
 
 import { parseArgs } from "node:util";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, cpSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { scopeCreds, STRIPPED_PREFIXES } from "./scope-creds.mjs";
 import { tryExtractResult, validateEnvelope, loadTaskOutputsSchema, loadTaskInvariants } from "./parse-result.mjs";
+import { loadRuntime, SUPPORTED_RUNTIMES } from "./runtimes/index.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -29,6 +31,7 @@ try {
     options: {
       task:       { type: "string" },
       inputs:     { type: "string" },
+      runtime:    { type: "string", default: "kern" },
       "audit-dir":{ type: "string" },
       timeout:    { type: "string" },
       "keep-workspace": { type: "boolean", default: false },
@@ -44,6 +47,12 @@ let inputsObj;
 try { inputsObj = JSON.parse(args.inputs); } catch (e) {
   die(1, `--inputs is not valid JSON: ${e.message}`);
 }
+
+const runtimeId = args.runtime;
+if (!SUPPORTED_RUNTIMES.includes(runtimeId)) {
+  die(1, `unknown --runtime ${runtimeId}. Supported: ${SUPPORTED_RUNTIMES.join(", ")}`);
+}
+
 const timeoutSec = args.timeout ? Number(args.timeout) : 600;
 const auditDir = args["audit-dir"]
   ? resolve(args["audit-dir"])
@@ -56,161 +65,88 @@ if (!taskSkillDir) {
   die(1, `task skill not found: ${args.task}`);
 }
 
+// ---- Parse skill frontmatter (runtimes, requires, taskMeta) -------------
+const taskSkillMeta = readSkillFrontmatter(join(taskSkillDir, "SKILL.md"));
+const supportedRuntimes = Array.isArray(taskSkillMeta.runtimes)
+  ? taskSkillMeta.runtimes
+  : ["kern"]; // default: kern only, for backward compatibility
+if (!supportedRuntimes.includes(runtimeId)) {
+  die(1,
+    `task '${args.task}' does not declare support for runtime '${runtimeId}'. ` +
+    `Declared: [${supportedRuntimes.join(", ")}]. ` +
+    `Add '${runtimeId}' to the task's 'runtimes:' frontmatter to enable.`
+  );
+}
+
+const requires = Array.isArray(taskSkillMeta.requires) ? taskSkillMeta.requires : [];
+const scopedEnv = scopeCreds(process.env, requires);
+
 // ---- Prepare run ---------------------------------------------------------
 const runId = mkRunId();
 const runDir = join(process.env.HOME || "/tmp", ".repliclaw", "runs", runId);
-const workspaceDir = join(runDir, "workspace");
-mkdirSync(workspaceDir, { recursive: true });
+mkdirSync(runDir, { recursive: true });
 
 const startedAt = new Date().toISOString();
 const auditPath = join(auditDir, `${runId}.json`);
 
-// ---- Materialize replica workspace --------------------------------------
-const templateDir = join(REPLICLAW_ROOT, "skills", "repliclaw", "templates", "replica-workspace");
-cpSync(templateDir, workspaceDir, { recursive: true });
-// Copy task skill into replica's skills/
-const replicaSkillDir = join(workspaceDir, "skills", args.task);
-cpSync(taskSkillDir, replicaSkillDir, { recursive: true });
-
-// ---- Scope creds ---------------------------------------------------------
-const taskSkillMeta = readSkillFrontmatter(join(taskSkillDir, "SKILL.md"));
-const requires = Array.isArray(taskSkillMeta.requires) ? taskSkillMeta.requires : [];
-const scopedEnv = scopeCreds(process.env, requires);
-
-// ---- Spawn kern-ai run ---------------------------------------------------
-const childEnv = {
-  // Neutral base
-  PATH: process.env.PATH,
-  HOME: process.env.HOME,
-  LANG: process.env.LANG || "C.UTF-8",
-  // Scoped creds
-  ...scopedEnv,
-  // Replica-specific
-  KERN_NAME: `replica-${runId}`,
-  REPLICLAW_RUN_ID: runId,
-  REPLICLAW_TASK: args.task,
-};
-// Never inherit parent auth token — child must generate its own.
-delete childEnv.KERN_AUTH_TOKEN;
-
-const child = spawn("kern-ai", ["run", "--init-if-needed", workspaceDir], {
-  env: childEnv,
-  stdio: ["ignore", "pipe", "pipe"],
-});
-
+// Log buffers, bounded so they don't grow unbounded during long runs.
 let stdoutBuf = "";
 let stderrBuf = "";
-child.stdout.on("data", d => { stdoutBuf += d.toString(); if (stdoutBuf.length > 1e6) stdoutBuf = stdoutBuf.slice(-5e5); });
-child.stderr.on("data", d => { stderrBuf += d.toString(); if (stderrBuf.length > 1e6) stderrBuf = stderrBuf.slice(-5e5); });
-
-// ---- Wait for replica to open port --------------------------------------
-const port = await waitForPort(workspaceDir, 30_000);
-if (!port) {
-  await terminate(child);
-  writeAudit({
-    status: "error",
-    error: "replica failed to open port within 30s",
-    endedAt: new Date().toISOString(),
-  });
-  cleanupWorkspace();
-  printResult({ runId, status: "error", result: null, auditPath });
-  process.exit(2);
-}
-
-// ---- Post seed message ---------------------------------------------------
-// kern appends KERN_AUTH_TOKEN to .env after port opens — give it a beat.
-await sleep(400);
-const authToken = readAuthToken(workspaceDir);
-const baseUrl = `http://127.0.0.1:${port}`;
-const headers = {
-  "Content-Type": "application/json",
-  ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+const logSink = {
+  pushStdout(s) { stdoutBuf += s; if (stdoutBuf.length > 1e6) stdoutBuf = stdoutBuf.slice(-5e5); },
+  pushStderr(s) { stderrBuf += s; if (stderrBuf.length > 1e6) stderrBuf = stderrBuf.slice(-5e5); },
 };
 
-const seedText = [
-  "[task]",
-  `Run skill: ${args.task}`,
-  `Inputs: ${JSON.stringify(inputsObj)}`,
-  `Run ID: ${runId} (use this as the runId field in your envelope)`,
-  "",
-  "Your skill file is at skills/" + args.task + "/SKILL.md. Read it carefully and follow it exactly.",
-  "",
-  "When complete, emit exactly one line of the form:",
-  "  <<RESULT>>{...envelope...}",
-  "where {...envelope...} is the standard Repliclaw result envelope as defined by the skill. The envelope MUST include all required fields (status, taskName, taskVersion, runId, startedAt, finishedAt, inputs, actions, notes, errors, data) per the schema. Then stop. Do not await further input. Do not add commentary after the result marker.",
-].join("\n");
+const ctx = {
+  runId,
+  taskName: args.task,
+  taskSkillDir,
+  taskSkillMeta,
+  inputsObj,
+  scopedEnv,
+  timeoutSec,
+  runDir,
+  keepWorkspace: args["keep-workspace"],
+  logSink,
+};
 
-try {
-  const resp = await fetch(`${baseUrl}/message`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      text: seedText,
-      userId: "repliclaw",
-      interface: "web",
-      channel: "web",
-    }),
-  });
-  if (!resp.ok) throw new Error(`seed POST failed: ${resp.status}`);
-} catch (e) {
-  await terminate(child);
-  writeAudit({
-    status: "error",
-    error: `seed failed: ${e.message}`,
-    endedAt: new Date().toISOString(),
-  });
-  cleanupWorkspace();
-  printResult({ runId, status: "error", result: null, auditPath });
-  process.exit(2);
-}
+const runtime = loadRuntime(runtimeId);
 
-// ---- Stream SSE, scan for result ----------------------------------------
-const deadline = Date.now() + timeoutSec * 1000;
+// ---- Run phases ----------------------------------------------------------
 let assistantText = "";
-let result = null;
 let errorReason = null;
 
 try {
-  const resp = await fetch(`${baseUrl}/events`, { headers, signal: AbortSignal.timeout(timeoutSec * 1000) });
-  if (!resp.body) throw new Error("no SSE body");
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (Date.now() < deadline && !result && !errorReason) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
-    for (const raw of events) {
-      const dataLines = raw.split("\n").filter(l => l.startsWith("data:")).map(l => l.slice(5).trim());
-      if (!dataLines.length) continue;
-      try {
-        const ev = JSON.parse(dataLines.join("\n"));
-        const text = extractText(ev);
-        if (text) assistantText += text;
-        const isEndOfTurn = ["message","turn_end","assistant_message","done"].includes(ev?.type);
-        if (isEndOfTurn || assistantText.includes("<<RESULT>>")) {
-          const ex = tryExtractResult(assistantText);
-          if (ex.kind === "ok") { result = ex.value; break; }
-          if (ex.kind === "malformed" && isEndOfTurn) { errorReason = `malformed result JSON: ${ex.raw}`; break; }
-        }
-      } catch { /* non-JSON SSE line */ }
-    }
-  }
+  await runtime.preflight(ctx);
+  await runtime.prepare(ctx);
+  await runtime.spawnAndSeed(ctx);
+  assistantText = await runtime.awaitResult(ctx);
 } catch (e) {
-  errorReason = `SSE error: ${e.message}`;
+  errorReason = `${runtimeId} runtime error: ${e.message}`;
 }
 
-// ---- Terminate + write audit --------------------------------------------
-await terminate(child);
-const endedAt = new Date().toISOString();
+// Cleanup is always attempted.
+try { await runtime.cleanup(ctx); } catch { /* best-effort */ }
 
+// ---- Extract + validate result ------------------------------------------
+const endedAt = new Date().toISOString();
 let status, auditResult;
 let validationErrors = null;
+let result = null;
+
+if (!errorReason && assistantText) {
+  const ex = tryExtractResult(assistantText);
+  if (ex.kind === "ok") {
+    result = ex.value;
+  } else if (ex.kind === "malformed") {
+    errorReason = `malformed result JSON: ${ex.raw}`;
+  } else {
+    // no marker found
+    errorReason = `no <<RESULT>> marker in assistant output`;
+  }
+}
+
 if (result) {
-  // Validate envelope (and task data schema if declared)
   const dataSchema = loadTaskOutputsSchema(taskSkillDir);
   const invariants = await loadTaskInvariants(taskSkillDir);
   const valOpts = {};
@@ -231,20 +167,14 @@ if (result) {
     auditResult = result;
   }
 } else if (errorReason) {
-  status = "error";
-  auditResult = { status: "error", reason: errorReason };
+  status = errorReason.startsWith("no <<RESULT>>") ? "timeout" : "error";
+  auditResult = { status, reason: errorReason };
 } else {
   status = "timeout";
   auditResult = { status: "timeout", reason: `no result within ${timeoutSec}s` };
 }
 
-writeAudit({
-  status,
-  result: auditResult,
-  endedAt,
-  validationErrors,
-});
-cleanupWorkspace();
+writeAudit({ status, result: auditResult, endedAt, validationErrors });
 printResult({ runId, status, result: auditResult, auditPath });
 process.exit(0);
 
@@ -302,59 +232,16 @@ function readSkillFrontmatter(path) {
   } catch { return {}; }
 }
 
-async function waitForPort(workspaceDir, timeoutMs) {
-  const start = Date.now();
-  const cfgPath = join(workspaceDir, ".kern", "config.json");
-  while (Date.now() - start < timeoutMs) {
-    try {
-      if (existsSync(cfgPath)) {
-        const cfg = JSON.parse(readFileSync(cfgPath, "utf-8"));
-        if (cfg.port && await probePort(cfg.port)) return cfg.port;
-      }
-    } catch { /* not ready */ }
-    await sleep(250);
-  }
-  return null;
-}
-
-async function probePort(port) {
-  try {
-    const r = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(500) });
-    return r.status === 200 || r.status === 401;
-  } catch { return false; }
-}
-
-function readAuthToken(workspaceDir) {
-  const p = join(workspaceDir, ".kern", ".env");
-  if (!existsSync(p)) return null;
-  const m = readFileSync(p, "utf-8").match(/^KERN_AUTH_TOKEN=(.+)$/m);
-  return m ? m[1].trim() : null;
-}
-
-function extractText(ev) {
-  if (!ev || typeof ev !== "object") return null;
-  if (typeof ev.text === "string") return ev.text;
-  if (typeof ev.delta === "string") return ev.delta;
-  if (Array.isArray(ev.content)) {
-    return ev.content.filter(p => p?.type === "text" && typeof p.text === "string").map(p => p.text).join("");
-  }
-  return null;
-}
-
-async function terminate(child) {
-  try { child.kill("SIGTERM"); } catch {}
-  await sleep(500);
-  try { if (!child.killed) child.kill("SIGKILL"); } catch {}
-}
-
 function writeAudit(patch) {
   const record = {
     runId,
     task: args.task,
+    runtime: runtimeId,
     taskMeta: {
       name: taskSkillMeta.name ?? null,
       version: taskSkillMeta.version ?? null,
       repliclawEnvelopeVersion: taskSkillMeta.repliclawEnvelopeVersion ?? null,
+      runtimes: supportedRuntimes,
       supports_plan_mode: taskSkillMeta.supports_plan_mode === true || taskSkillMeta.supports_plan_mode === "true",
       outputs_files: Array.isArray(taskSkillMeta.outputs_files) ? taskSkillMeta.outputs_files : [],
     },
@@ -366,7 +253,7 @@ function writeAudit(patch) {
     result: patch.result ?? null,
     error: patch.error ?? null,
     validationErrors: patch.validationErrors ?? null,
-    replicaWorkspace: workspaceDir,
+    runDir,
     stdoutTail: stdoutBuf.slice(-4096),
     stderrTail: stderrBuf.slice(-4096),
     scopedEnvKeys: Object.keys(scopedEnv).sort(),
@@ -375,16 +262,9 @@ function writeAudit(patch) {
   writeFileSync(auditPath, JSON.stringify(record, null, 2));
 }
 
-function cleanupWorkspace() {
-  if (args["keep-workspace"]) return;
-  try { rmSync(runDir, { recursive: true, force: true }); } catch {}
-}
-
 function printResult(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function die(code, msg) {
   process.stderr.write(`repliclaw: ${msg}\n`);
