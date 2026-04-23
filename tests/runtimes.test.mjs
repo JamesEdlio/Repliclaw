@@ -101,6 +101,25 @@ await t("openclaw preflight rejects gateway mode with no openclawAgent", async (
   await assertThrows(() => openclaw.preflight(ctx));
 });
 
+await t("openclaw preflight rejects gateway mode with no OPENCLAW_GATEWAY_TOKEN", async () => {
+  // With a valid agent id but no token, preflight should surface the
+  // bearer-token requirement before attempting the health check.
+  const origToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  try {
+    const openclaw = loadRuntime("openclaw");
+    const ctx = mkCtx({
+      taskSkillMeta: { openclawMode: "gateway", openclawAgent: "main" },
+    });
+    // The CLI check runs first; if the CLI happens to be present we expect
+    // the token error, otherwise the CLI-missing error is fine. Either proves
+    // preflight rejects the unsafe setup.
+    await assertThrows(() => openclaw.preflight(ctx));
+  } finally {
+    if (origToken !== undefined) process.env.OPENCLAW_GATEWAY_TOKEN = origToken;
+  }
+});
+
 await t("openclaw preflight throws when openclaw CLI is missing", async () => {
   // Force PATH to somewhere without openclaw so spawn ENOENTs.
   const origPath = process.env.PATH;

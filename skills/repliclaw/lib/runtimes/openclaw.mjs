@@ -7,15 +7,25 @@
 // message containing <<RESULT>>, then let `cleanup: "delete"` (set at spawn
 // time) tear the session down.
 //
-// We talk to the gateway through the `openclaw` CLI, specifically
-// `openclaw gateway call <method>`. That CLI handles the WS v3
-// challenge-sign / token / password auth flow natively, so this adapter
-// doesn't have to speak WebSocket directly or manage a device keypair.
-// Methods used:
-//   - health                                  (preflight)
-//   - tools.invoke  (tool: sessions_spawn)    (spawn)
-//   - tools.invoke  (tool: sessions_history)  (poll for final reply)
-//   - tools.invoke  (tool: subagents, action: kill)  (abort on timeout/error)
+// How we reach the gateway:
+//   - Preflight health:  `openclaw gateway call health`  (CLI RPC path)
+//   - Tool invocations:  HTTP POST http://127.0.0.1:18789/tools/invoke
+//                        with Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN
+//
+// The CLI's `gateway call` method dispatcher only routes a narrow allowlist
+// (health, status, system-presence, cron.*, sessions.*) and does NOT expose
+// `tools.invoke`. Tool invocation lives on the HTTP API instead.
+//
+// Tools used:
+//   - sessions_spawn    (spawn the child session)   [requires allowlist, see below]
+//   - sessions_history  (poll for the child's final reply)
+//   - subagents         (kill on timeout/error)
+//
+// Operator config requirement: `sessions_spawn` is in the gateway's default
+// HTTP deny-list. Lift it in openclaw.json:
+//   { "gateway": { "tools": { "allow": ["sessions_spawn"] } } }
+// This keeps the trust boundary at loopback + bearer token (same as the rest
+// of the HTTP API) and does not broaden network exposure.
 //
 // Fallback path: `openclaw agent --local` runs the runtime embedded in a
 // short-lived CLI process, no gateway required. Per OpenClaw docs this is
@@ -77,6 +87,14 @@ export default {
           "and allowlist."
         );
       }
+      if (!process.env.OPENCLAW_GATEWAY_TOKEN) {
+        throw new Error(
+          "openclaw gateway mode requires OPENCLAW_GATEWAY_TOKEN. " +
+          "Export the gateway bearer token for the HTTP API (used by /tools/invoke). " +
+          "Confirm with: `curl -sH \"Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN\" " +
+          "http://127.0.0.1:18789/health`."
+        );
+      }
       const health = await callGateway("health", {}, { timeoutMs: 5000 });
       if (!health.ok) {
         throw new Error(
@@ -122,6 +140,10 @@ export default {
       const replicaSkillDir = join(workspaceDir, "skills", ctx.taskName);
       cpSync(ctx.taskSkillDir, replicaSkillDir, { recursive: true });
 
+      // Note: on openclaw CLI 2026.3.28, `agents add` was still an interactive
+      // wizard and did not accept `--non-interactive`. Newer builds are
+      // expected to support it. If this call errors with an unknown flag,
+      // either upgrade the CLI or switch the task to gateway mode.
       const add = await runCaptured(
         "openclaw",
         ["agents", "add", ctx._runtimeState.agentId, "--workspace", workspaceDir, "--non-interactive", "--json"],
@@ -183,14 +205,10 @@ export default {
     //    should already be gone. This is a best-effort guard for timeouts
     //    and thrown errors mid-await.
     if (state.mode === "gateway" && state.childSessionKey) {
-      await callGateway(
-        "tools.invoke",
-        {
-          tool: "subagents",
-          args: { action: "kill", target: state.childSessionKey },
-          sessionKey: state.parentSessionKey,
-        },
-        { timeoutMs: 5000 },
+      await invokeTool(
+        "subagents",
+        { action: "kill", target: state.childSessionKey },
+        { sessionKey: state.parentSessionKey, timeoutMs: 5000 },
       ).catch(() => {}); // best-effort
     }
 
@@ -225,29 +243,26 @@ async function spawnGateway(ctx) {
     label: `repliclaw:${ctx.taskName}:${ctx.runId}`,
   };
 
-  const res = await callGateway(
-    "tools.invoke",
-    {
-      tool: "sessions_spawn",
-      args: spawnArgs,
-      sessionKey: state.parentSessionKey,
-    },
-    { timeoutMs: 15_000 },
+  const res = await invokeTool(
+    "sessions_spawn",
+    spawnArgs,
+    { sessionKey: state.parentSessionKey, timeoutMs: 15_000 },
   );
   if (!res.ok) {
     throw new Error(
       `openclaw sessions_spawn failed: ${res.reason}. ` +
-      `stderr: ${(res.stderr || "").slice(-400)}`
+      `${res.hint ? `hint: ${res.hint}. ` : ""}` +
+      `body: ${(res.body || "").slice(-400)}`
     );
   }
 
-  // Shape per docs: { status: "accepted", runId, childSessionKey }
-  const payload = pluckToolResult(res.stdout);
-  const childKey = payload?.childSessionKey || payload?.result?.childSessionKey;
-  const childRunId = payload?.runId || payload?.result?.runId;
+  // HTTP shape: { ok: true, result: { status, runId, childSessionKey } }
+  const payload = res.result || {};
+  const childKey = payload.childSessionKey || payload.result?.childSessionKey;
+  const childRunId = payload.runId || payload.result?.runId;
   if (!childKey) {
     throw new Error(
-      `openclaw sessions_spawn returned no childSessionKey. raw: ${res.stdout.slice(-400)}`
+      `openclaw sessions_spawn returned no childSessionKey. body: ${(res.body || "").slice(-400)}`
     );
   }
   state.childSessionKey = childKey;
@@ -263,18 +278,14 @@ async function awaitGateway(ctx) {
 
   let lastAssistantText = "";
   while (Date.now() < deadline) {
-    const histRes = await callGateway(
-      "tools.invoke",
-      {
-        tool: "sessions_history",
-        args: { sessionKey: state.childSessionKey, limit: 30 },
-        sessionKey: state.parentSessionKey,
-      },
-      { timeoutMs: 8000 },
+    const histRes = await invokeTool(
+      "sessions_history",
+      { sessionKey: state.childSessionKey, limit: 30 },
+      { sessionKey: state.parentSessionKey, timeoutMs: 8000 },
     );
 
     if (histRes.ok) {
-      const text = extractAssistantText(pluckToolResult(histRes.stdout));
+      const text = extractAssistantText(histRes.result);
       if (text) {
         lastAssistantText = text;
         const ex = tryExtractResult(text);
@@ -283,7 +294,7 @@ async function awaitGateway(ctx) {
 
       // If the session no longer exists (cleanup: "delete" already fired),
       // return whatever we have — run.mjs will interpret empty/malformed.
-      if (sessionGone(histRes.stdout)) {
+      if (sessionGone(histRes.body)) {
         return lastAssistantText;
       }
     }
@@ -335,11 +346,11 @@ function rowText(row) {
   return "";
 }
 
-function sessionGone(stdout) {
-  if (!stdout) return false;
+function sessionGone(body) {
+  if (!body) return false;
   // Heuristic — gateway surfaces "session not found" / "unknown sessionKey"
   // in tool error payloads after cleanup:"delete" archives the row.
-  return /session (?:not found|unknown|archived)/i.test(stdout);
+  return /session (?:not found|unknown|archived)/i.test(body);
 }
 
 // ---- local mode (experimental fallback) ---------------------------------
@@ -475,6 +486,10 @@ function localChildEnv(ctx) {
 /**
  * Run `openclaw gateway call <method> --params <json>` and capture stdout.
  * The CLI returns JSON for RPC replies; errors still go to stderr + exit != 0.
+ *
+ * Only used for the narrow set of methods the CLI dispatcher actually routes:
+ * health, status, system-presence, cron.*, sessions.* (sessions.list etc.).
+ * Tool invocation does NOT go through here — see invokeTool() below.
  */
 async function callGateway(method, params, opts = {}) {
   const args = ["gateway", "call", method, "--params", JSON.stringify(params || {}), "--json"];
@@ -490,16 +505,94 @@ async function callGateway(method, params, opts = {}) {
 }
 
 /**
- * `tools.invoke` replies are wrapped — pull out the payload we care about.
- * The CLI may serialize either {ok, result} (HTTP-ish shape) or a raw
- * tool output. Be liberal.
+ * POST /tools/invoke on the local gateway HTTP API.
+ *
+ * Returns a normalized shape:
+ *   { ok: true,  result: <tool payload>, body: <raw body> }          on 200 + {ok:true}
+ *   { ok: false, reason, hint, body, status }                         on any error
+ *
+ * `opts.sessionKey` is forwarded to the tool when present — many tools
+ * (sessions_spawn, sessions_history, subagents) require a calling session
+ * context so the gateway can resolve parent agent policy and allowlists.
+ */
+async function invokeTool(tool, args, opts = {}) {
+  const host = process.env.OPENCLAW_GATEWAY_HOST || "127.0.0.1";
+  const port = process.env.OPENCLAW_GATEWAY_PORT || "18789";
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN;
+  if (!token) {
+    return {
+      ok: false,
+      reason: "OPENCLAW_GATEWAY_TOKEN not set",
+      hint: "export the gateway bearer token; see preflight error for details",
+      body: "",
+      status: 0,
+    };
+  }
+
+  const url = `http://${host}:${port}/tools/invoke`;
+  const payload = { tool, args: args || {} };
+  if (opts.sessionKey) payload.sessionKey = opts.sessionKey;
+
+  const controller = new AbortController();
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.text();
+    let parsed = null;
+    try { parsed = JSON.parse(body); } catch {}
+
+    // Gateway shape: { ok: true, result: ... }  OR  { ok: false, error: { type, message } }
+    if (res.ok && parsed && parsed.ok === true) {
+      return { ok: true, result: parsed.result ?? parsed, body, status: res.status };
+    }
+    const errType = parsed?.error?.type || "unknown";
+    const errMsg = parsed?.error?.message || body.slice(0, 200) || `HTTP ${res.status}`;
+    let hint = null;
+    if (errType === "not_found" && /sessions_spawn/.test(errMsg)) {
+      hint =
+        "sessions_spawn is in the gateway's default HTTP deny-list. " +
+        "Add `gateway.tools.allow: [\"sessions_spawn\"]` to openclaw.json and restart the gateway.";
+    } else if (res.status === 401 || res.status === 403) {
+      hint = "bearer token rejected; verify OPENCLAW_GATEWAY_TOKEN";
+    }
+    return {
+      ok: false,
+      reason: `${errType}: ${errMsg}`,
+      hint,
+      body,
+      status: res.status,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: e.name === "AbortError" ? `timed out after ${timeoutMs}ms` : e.message,
+      body: "",
+      status: 0,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Legacy helper kept only for any ad-hoc CLI JSON the adapter may still parse.
+ * HTTP responses use the normalized shape from invokeTool() directly.
  */
 function pluckToolResult(stdout) {
   const trimmed = (stdout ?? "").trim();
   if (!trimmed) return null;
   try {
     const obj = JSON.parse(trimmed);
-    // tools.invoke: { ok: true, result: {...} } OR directly the tool's output.
     if (obj && typeof obj === "object") {
       if (obj.result && typeof obj.result === "object") return obj.result;
       return obj;

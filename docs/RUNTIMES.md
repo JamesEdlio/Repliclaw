@@ -49,12 +49,19 @@ There's also an experimental local mode that runs `openclaw agent --local` in a 
 
 ### Gateway mode (default)
 
-**Model:** Repliclaw talks to the gateway through the `openclaw` CLI — specifically `openclaw gateway call <method>` — which handles WS auth (v3 challenge-sign, token, or password) natively so this adapter doesn't have to speak WebSocket. Per run:
+**Model:** Repliclaw drives the gateway through two paths, because the gateway exposes tool invocation only over HTTP (not through the CLI RPC dispatcher):
 
-1. **Preflight** — verify CLI present, `gateway call health` succeeds, and an `openclawAgent` is declared.
-2. **Spawn** — `gateway call tools.invoke` with `tool: "sessions_spawn"`, `args: { task, agentId, cleanup: "delete", runTimeoutSeconds, sandbox: "inherit" }`, `sessionKey: <parent>`. Returns `{ status: "accepted", runId, childSessionKey }` immediately — it's non-blocking.
-3. **Poll** — `gateway call tools.invoke` with `tool: "sessions_history"`, `sessionKey: <parentKey>`, args pointing at the child session key. Polling cadence is ~1.5s. We look for an assistant message whose concatenated `content[type==="text"].text` contains the `<<RESULT>>` marker, then parse the envelope.
-4. **Cleanup** — `cleanup: "delete"` at spawn time handles the normal exit. On timeout or thrown error, the adapter calls `tools.invoke subagents { action: "kill", target: <childKey> }` for a cascade stop.
+- **Health check:** `openclaw gateway call health` (CLI RPC path). The CLI dispatcher routes a narrow allowlist — `health`, `status`, `system-presence`, `cron.*`, `sessions.*` — and that's all it's used for.
+- **Tool invocation:** `POST http://127.0.0.1:18789/tools/invoke` with `Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN`, body `{ tool, args, sessionKey }`. Response shape: `{ ok: true, result: ... }` on success, `{ ok: false, error: { type, message } }` on failure.
+
+> **Why not `openclaw gateway call tools.invoke`?** That dispatcher method is not exposed by the CLI. Diana verified on a live gateway: `gateway call tools.invoke` errors with `unknown method: tools.invoke`. Tool invocation is HTTP-only.
+
+Per run:
+
+1. **Preflight** — verify CLI present, `OPENCLAW_GATEWAY_TOKEN` is set, `gateway call health` succeeds, and an `openclawAgent` is declared.
+2. **Spawn** — `POST /tools/invoke` with `tool: "sessions_spawn"`, `args: { task, agentId, cleanup: "delete", runTimeoutSeconds, sandbox: "inherit" }`, `sessionKey: <parent>`. Returns `{ status: "accepted", runId, childSessionKey }` immediately — it's non-blocking.
+3. **Poll** — `POST /tools/invoke` with `tool: "sessions_history"`, `args: { sessionKey: <childKey>, limit: 30 }`, `sessionKey: <parentKey>`. Cadence is ~1.5s. We look for an assistant message whose concatenated `content[type==="text"].text` contains the `<<RESULT>>` marker, then parse the envelope.
+4. **Cleanup** — `cleanup: "delete"` at spawn time handles the normal exit. On timeout or thrown error, the adapter calls `POST /tools/invoke` with `tool: "subagents"`, `args: { action: "kill", target: <childKey> }` for a cascade stop.
 
 **Why polling, not push?** OpenClaw's own guidance tells sub-agent orchestrators inside the gateway to rely on push announces and avoid polling. Repliclaw is an **external** orchestrator (we're outside the parent session), so we don't get the push. Polling is the practical path; keep the cadence modest and rely on `cleanup: "delete"` to bound the session's lifetime.
 
@@ -64,7 +71,16 @@ There's also an experimental local mode that runs `openclaw agent --local` in a 
 
 - `openclaw` CLI on `PATH`.
 - A running gateway the CLI can reach (`openclaw gateway call health` returns ok).
-- Auth wired for the CLI: either `gateway.auth.mode="token"` with `OPENCLAW_GATEWAY_TOKEN` in env, `gateway.auth.mode="password"` with `OPENCLAW_GATEWAY_PASSWORD`, or `gateway.auth.mode="none"` on private ingress. Device-identity (v3 challenge-sign) also works if your CLI has a registered device keypair.
+- `OPENCLAW_GATEWAY_TOKEN` in env — bearer token for the HTTP API. Verify with:
+  ```sh
+  curl -sH "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" http://127.0.0.1:18789/health
+  ```
+  Override host/port with `OPENCLAW_GATEWAY_HOST` / `OPENCLAW_GATEWAY_PORT` if the gateway isn't on `127.0.0.1:18789`.
+- **`sessions_spawn` lifted from the HTTP deny-list.** By default the gateway's HTTP API refuses `sessions_spawn` (along with `cron`, `sessions_send`, `gateway`, `whatsapp_login`). Add it to the allowlist in `openclaw.json`:
+  ```json
+  { "gateway": { "tools": { "allow": ["sessions_spawn"] } } }
+  ```
+  Restart the gateway after editing. Trust boundary stays at loopback + bearer token — same as every other tool on the HTTP API.
 - `openclawAgent: <id>` set in SKILL.md frontmatter (or `OPENCLAW_AGENT_ID` env var). This is the existing gateway agent whose config (sandbox, env, tool allowlist) will govern the child session. Repliclaw does NOT create gateway agents on demand.
 - That agent's `subagents.allowAgents` must permit spawning itself (or include `"*"`).
 
@@ -111,7 +127,7 @@ There's also an experimental local mode that runs `openclaw agent --local` in a 
 
 Unlike kern (where Repliclaw materializes the workspace and controls env at spawn time), gateway-mode sessions run inside the gateway's policy envelope. The gateway forwards env from **its own** config, not from the Repliclaw CLI invocation's env.
 
-1. **Host-side:** Repliclaw's cred scoper controls what the `openclaw gateway call` CLI process sees. Its only job is to submit the RPC, so this mostly doesn't matter.
+1. **Host-side:** Repliclaw's cred scoper controls what the HTTP call + CLI processes see. Those only submit RPC/HTTP requests — no task code runs host-side — so host-side env mostly doesn't matter beyond `OPENCLAW_GATEWAY_TOKEN`.
 2. **Gateway-side:** the target agent's `agents.<id>.env` / `agents.defaults.env` block decides what the replica can read.
 
 If you need strong host-side control over what the replica can touch, use local mode or kern. Gateway mode is for fleets that want one shared policy envelope across many concurrent sessions.
