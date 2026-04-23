@@ -100,7 +100,7 @@ Per run:
         "mode": "non-main",
         "scope": "session",
         "backend": "docker",
-        "workspaceRoot": "~/.openclaw/sandboxes",
+        "workspaceAccess": "none",
         "prune": { "idleHours": 24, "maxAgeDays": 7 }
       },
       "env": {
@@ -120,7 +120,7 @@ Per run:
 }
 ```
 
-- `sandbox.mode: "non-main"` + `scope: "session"` gives each sub-agent session its own Docker-backed sandbox workspace, which is what you want for real isolation.
+- `sandbox.mode: "non-main"` + `scope: "session"` gives each sub-agent session its own Docker-backed sandbox. With `workspaceAccess: "none"` the scratch workspace is materialized under `~/.openclaw/sandboxes/` automatically — the path is managed by OpenClaw, not configurable here.
 - Denying `message` and `sessions_send` enforces Repliclaw's actions-through-parent pattern (see [`PATTERNS.md`](./PATTERNS.md) §1) — replicas can't DM Slack/Telegram on your behalf.
 
 ### Host-side vs gateway-side credential scoping (important)
