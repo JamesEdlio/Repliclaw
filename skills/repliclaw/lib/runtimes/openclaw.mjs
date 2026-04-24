@@ -95,7 +95,7 @@ export default {
           "http://127.0.0.1:18789/health`."
         );
       }
-      const health = await callGateway("health", {}, { timeoutMs: 5000 });
+      const health = await callGateway("health", {}, { timeoutMs: 15_000 });
       if (!health.ok) {
         throw new Error(
           `openclaw gateway not reachable (health check failed: ${health.reason}). ` +
@@ -138,7 +138,7 @@ export default {
       cpSync(templateDir, workspaceDir, { recursive: true });
 
       const replicaSkillDir = join(workspaceDir, "skills", ctx.taskName);
-      cpSync(ctx.taskSkillDir, replicaSkillDir, { recursive: true });
+      cpSync(ctx.taskSkillDir, replicaSkillDir, { recursive: true, dereference: true });
 
       // Note: on openclaw CLI 2026.3.28, `agents add` was still an interactive
       // wizard and did not accept `--non-interactive`. Newer builds are
@@ -170,7 +170,7 @@ export default {
     // gateway resolved.
     const stagingDir = join(ctx.runDir, "skill-snapshot");
     mkdirSync(stagingDir, { recursive: true });
-    cpSync(ctx.taskSkillDir, stagingDir, { recursive: true });
+    cpSync(ctx.taskSkillDir, stagingDir, { recursive: true, dereference: true });
     ctx._runtimeState.stagingDir = stagingDir;
   },
 
@@ -256,10 +256,20 @@ async function spawnGateway(ctx) {
     );
   }
 
-  // HTTP shape: { ok: true, result: { status, runId, childSessionKey } }
+  // HTTP shape (OpenClaw 2026.3.28+):
+  //   { ok: true, result: {
+  //       content: [{ type: "text", text: "<JSON-as-string>" }],
+  //       details: { status, runId, childSessionKey, ... }
+  //   }}
+  // Legacy shape: { ok: true, result: { status, runId, childSessionKey } }
   const payload = res.result || {};
-  const childKey = payload.childSessionKey || payload.result?.childSessionKey;
-  const childRunId = payload.runId || payload.result?.runId;
+  const details = payload.details || {};
+  const childKey =
+    details.childSessionKey ||
+    payload.childSessionKey ||
+    payload.result?.childSessionKey;
+  const childRunId =
+    details.runId || payload.runId || payload.result?.runId;
   if (!childKey) {
     throw new Error(
       `openclaw sessions_spawn returned no childSessionKey. body: ${(res.body || "").slice(-400)}`
@@ -306,14 +316,18 @@ async function awaitGateway(ctx) {
 }
 
 /**
- * sessions_history returns an object whose shape isn't fully specced in
- * public docs; in practice it carries an array of messages under .items
- * or .messages, each with role + content[]. We pick the latest assistant
- * message's concatenated text.
+ * sessions_history return shape varies across OpenClaw versions:
+ *   2026.3.28+: { ok, result: { content: [...], details: { messages|items|history } } }
+ *   legacy:     { ok, result: { messages|items|history } }
+ * We pick the latest assistant message's concatenated text.
  */
 function extractAssistantText(resultPayload) {
   if (!resultPayload || typeof resultPayload !== "object") return "";
+  const details = resultPayload.details || {};
   const candidates = [
+    details.messages,
+    details.items,
+    details.history,
     resultPayload.messages,
     resultPayload.items,
     resultPayload.history,
