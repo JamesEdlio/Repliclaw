@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { scopeCreds, STRIPPED_PREFIXES } from "./scope-creds.mjs";
 import { tryExtractResult, validateEnvelope, loadTaskOutputsSchema, loadTaskInvariants } from "./parse-result.mjs";
 import { loadRuntime, SUPPORTED_RUNTIMES } from "./runtimes/index.mjs";
+import { initEvents, emit, closeEvents } from "./events.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -35,6 +36,8 @@ try {
       "audit-dir":{ type: "string" },
       timeout:    { type: "string" },
       "keep-workspace": { type: "boolean", default: false },
+      "events-fd":   { type: "string" },
+      "events-file": { type: "string" },
     },
   }).values;
 } catch (err) {
@@ -89,12 +92,28 @@ mkdirSync(runDir, { recursive: true });
 const startedAt = new Date().toISOString();
 const auditPath = join(auditDir, `${runId}.json`);
 
+// ---- Events emitter (optional) -------------------------------------------
+// Allows orchestrators to stream run progress live. If neither --events-fd
+// nor --events-file is supplied, emit() is a no-op and nothing is written.
+initEvents({
+  runId,
+  fd: args["events-fd"] !== undefined ? Number(args["events-fd"]) : undefined,
+  file: args["events-file"],
+});
+emit("phase", { phase: "start", task: args.task, runtime: runtimeId });
+
 // Log buffers, bounded so they don't grow unbounded during long runs.
 let stdoutBuf = "";
 let stderrBuf = "";
 const logSink = {
-  pushStdout(s) { stdoutBuf += s; if (stdoutBuf.length > 1e6) stdoutBuf = stdoutBuf.slice(-5e5); },
-  pushStderr(s) { stderrBuf += s; if (stderrBuf.length > 1e6) stderrBuf = stderrBuf.slice(-5e5); },
+  pushStdout(s) {
+    stdoutBuf += s; if (stdoutBuf.length > 1e6) stdoutBuf = stdoutBuf.slice(-5e5);
+    emit("stdout", { text: s });
+  },
+  pushStderr(s) {
+    stderrBuf += s; if (stderrBuf.length > 1e6) stderrBuf = stderrBuf.slice(-5e5);
+    emit("stderr", { text: s });
+  },
 };
 
 const ctx = {
@@ -117,15 +136,21 @@ let assistantText = "";
 let errorReason = null;
 
 try {
+  emit("phase", { phase: "preflight" });
   await runtime.preflight(ctx);
+  emit("phase", { phase: "prepare" });
   await runtime.prepare(ctx);
+  emit("phase", { phase: "spawn" });
   await runtime.spawnAndSeed(ctx);
+  emit("phase", { phase: "awaiting" });
   assistantText = await runtime.awaitResult(ctx);
 } catch (e) {
   errorReason = `${runtimeId} runtime error: ${e.message}`;
+  emit("error", { message: errorReason });
 }
 
 // Cleanup is always attempted.
+emit("phase", { phase: "cleanup" });
 try { await runtime.cleanup(ctx); } catch { /* best-effort */ }
 
 // ---- Extract + validate result ------------------------------------------
@@ -175,6 +200,9 @@ if (result) {
 }
 
 writeAudit({ status, result: auditResult, endedAt, validationErrors });
+emit("result", { status, envelope: auditResult });
+emit("phase", { phase: "done", status });
+closeEvents();
 printResult({ runId, status, result: auditResult, auditPath });
 process.exit(0);
 

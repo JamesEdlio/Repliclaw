@@ -51,10 +51,11 @@ repliclaw/
 │           └── replica-workspace/      ← AGENTS.md + IDENTITY.md for replicas
 ├── tasks/                              ← example/reference task skills
 │   └── hello/                          ← smoke test (rename/copy as the starting point for your own task)
-└── docs/
+├── docs/
     ├── AUTHORING.md                    ← how to write a task skill
     ├── ACTION-TYPES.md                 ← canonical action type vocabulary
     ├── CREDENTIALS.md                  ← cred-scoping contract
+    ├── EVENTS.md                       ← live NDJSON progress stream
     └── AUDIT.md                        ← audit log schema
 ```
 
