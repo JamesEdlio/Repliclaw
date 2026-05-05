@@ -362,8 +362,8 @@ function forgeHeaders() {
 }
 
 function forgeUrl(path) {
-  const base = process.env.FORGE_URL;
-  if (!base) throw new Error("FORGE_URL not in env");
+  const base = process.env.FORGE_URL || process.env.FORGE_BASE_URL;
+  if (!base) throw new Error("FORGE_URL (or FORGE_BASE_URL) not in env");
   return `${base.replace(/\/$/, "")}${path}`;
 }
 

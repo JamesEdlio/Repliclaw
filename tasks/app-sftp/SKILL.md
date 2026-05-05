@@ -6,6 +6,7 @@ repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
 requires:
   - FORGE_URL
+  - FORGE_BASE_URL
   - FORGE_SHARED_SECRET
   - FILEMAGE_API_URL
   - FILEMAGE_API_KEY
