@@ -1,10 +1,9 @@
 ---
 name: app-sftp
-version: 0.1.0
+version: 0.2.0
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
-runtimes:
-  - kern
+exec: ./run.mjs
 requires:
   - FORGE_URL
   - FORGE_SHARED_SECRET
@@ -12,8 +11,6 @@ requires:
   - FILEMAGE_API_KEY
   - OP_SERVICE_ACCOUNT_TOKEN
   - GMAIL_FROM
-  - GMAIL_CLIENT_SECRET_JSON
-  - GMAIL_TOKEN_JSON
 inputs:
   ticket_key:
     type: string
@@ -23,6 +20,10 @@ inputs:
     type: boolean
     required: false
     description: If true, take no external actions (no FileMage provisioning, no 1Password share, no email, no Forge mutations). Emit the envelope that *would* have been produced, with every action marked status=skipped and details.dry_run=true.
+  force_rerun:
+    type: boolean
+    required: false
+    description: If true, bypass the dup-send guard and send the setup email even if a prior [app-sftp] setup-sent marker is found in ticket comments. Use with care.
 outputs:
   status:
     type: string
@@ -38,6 +39,11 @@ outputs_schema: ./schema.json
 ---
 
 # app-sftp — Send SFTP setup email (Forge-native)
+
+> **Implementation note (v0.1.0):** This task is deterministic and runs via
+> the `exec:` frontmatter — repliclaw executes `./run.mjs` directly as a
+> child process instead of spawning an LLM-driven replica. The SKILL.md
+> below is the spec, not a playbook. To change behavior, edit `run.mjs`.
 
 Runs in a Repliclaw replica spawned by the Edith bridge when a user drops the `app-sftp` agent on a Forge ticket.
 
@@ -122,7 +128,6 @@ Collect recipient list:
 
 - If `ticket.reporter?.email` is non-empty AND the address ends with `@edlio.com`, add it to `cc` (all Forge User rows with @edlio.com addresses are active Edlio accounts).
 - Otherwise, do not CC the reporter (external reporters don't get CC'd).
-- Always include `sharon@edlio.com` in CC unless she is already the reporter or POC.
 
 ### Step 4 — FileMage provision
 
@@ -216,7 +221,7 @@ Email envelope:
 
 - `From`: `Edith <edith@edlio.com>` (explicit RFC-5322 display name override — the Gmail account-level name may read bare `edith@edlio.com`, but the `From` header wins per-message)
 - `To`: the Step-3 recipient list
-- `Cc`: Step-3 CC list (reporter if internal Edlio), joined with `sharon@edlio.com` if not already present (Sharon is the standing internal oversight contact — omit only if she is already the reporter)
+- `Cc`: Step-3 CC list — reporter email only if it's an @edlio.com address (i.e. the reporter is an internal Edlio user). External reporters are not CC'd.
 - `Subject`: `SFTP Setup — <schoolName>`
 - `Body`: rendered template HTML, followed by sig:
   ```

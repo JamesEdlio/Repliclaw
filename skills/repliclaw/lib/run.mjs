@@ -14,6 +14,7 @@ import { parseArgs } from "node:util";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { scopeCreds, STRIPPED_PREFIXES } from "./scope-creds.mjs";
@@ -70,10 +71,11 @@ if (!taskSkillDir) {
 
 // ---- Parse skill frontmatter (runtimes, requires, taskMeta) -------------
 const taskSkillMeta = readSkillFrontmatter(join(taskSkillDir, "SKILL.md"));
+const hasExec = !!taskSkillMeta.exec;
 const supportedRuntimes = Array.isArray(taskSkillMeta.runtimes)
   ? taskSkillMeta.runtimes
-  : ["kern"]; // default: kern only, for backward compatibility
-if (!supportedRuntimes.includes(runtimeId)) {
+  : (hasExec ? [] : ["kern"]); // exec tasks don't need a runtime; replica tasks default to kern
+if (!hasExec && !supportedRuntimes.includes(runtimeId)) {
   die(1,
     `task '${args.task}' does not declare support for runtime '${runtimeId}'. ` +
     `Declared: [${supportedRuntimes.join(", ")}]. ` +
@@ -100,7 +102,7 @@ initEvents({
   fd: args["events-fd"] !== undefined ? Number(args["events-fd"]) : undefined,
   file: args["events-file"],
 });
-emit("phase", { phase: "start", task: args.task, runtime: runtimeId });
+emit("phase", { phase: "start", task: args.task, mode: taskSkillMeta.exec ? "exec" : "replica", runtime: runtimeId });
 
 // Log buffers, bounded so they don't grow unbounded during long runs.
 let stdoutBuf = "";
@@ -129,29 +131,50 @@ const ctx = {
   logSink,
 };
 
-const runtime = loadRuntime(runtimeId);
-
-// ---- Run phases ----------------------------------------------------------
+// ---- Deterministic exec short-circuit ------------------------------------
+// If the task declares `exec: ./some-script`, run it directly as a child
+// process instead of spawning a replica. Used for deterministic tasks that
+// don't need LLM reasoning — saves a spawn (~5-10s) and all the replica's
+// token cost. The script gets the task inputs as JSON on stdin, the scoped
+// env as process.env, and must emit a <<RESULT>>{...}<<END>> line on stdout
+// just like a replica would.
+//
+// Contract: the exec script is trusted. It runs in the parent's filesystem
+// with the scoped env (interface tokens stripped, only declared `requires:`
+// passed through). No workspace isolation. If you need isolation, don't
+// use exec — spawn a replica.
 let assistantText = "";
 let errorReason = null;
 
-try {
-  emit("phase", { phase: "preflight" });
-  await runtime.preflight(ctx);
-  emit("phase", { phase: "prepare" });
-  await runtime.prepare(ctx);
-  emit("phase", { phase: "spawn" });
-  await runtime.spawnAndSeed(ctx);
-  emit("phase", { phase: "awaiting" });
-  assistantText = await runtime.awaitResult(ctx);
-} catch (e) {
-  errorReason = `${runtimeId} runtime error: ${e.message}`;
-  emit("error", { message: errorReason });
-}
+if (taskSkillMeta.exec) {
+  emit("phase", { phase: "exec", script: taskSkillMeta.exec });
+  try {
+    assistantText = await runExec({ ctx, exec: String(taskSkillMeta.exec) });
+  } catch (e) {
+    errorReason = `exec error: ${e.message}`;
+    emit("error", { message: errorReason });
+  }
+} else {
+  // ---- Replica path (default) --------------------------------------------
+  const runtime = loadRuntime(runtimeId);
+  try {
+    emit("phase", { phase: "preflight" });
+    await runtime.preflight(ctx);
+    emit("phase", { phase: "prepare" });
+    await runtime.prepare(ctx);
+    emit("phase", { phase: "spawn" });
+    await runtime.spawnAndSeed(ctx);
+    emit("phase", { phase: "awaiting" });
+    assistantText = await runtime.awaitResult(ctx);
+  } catch (e) {
+    errorReason = `${runtimeId} runtime error: ${e.message}`;
+    emit("error", { message: errorReason });
+  }
 
-// Cleanup is always attempted.
-emit("phase", { phase: "cleanup" });
-try { await runtime.cleanup(ctx); } catch { /* best-effort */ }
+  // Cleanup is always attempted.
+  emit("phase", { phase: "cleanup" });
+  try { await runtime.cleanup(ctx); } catch { /* best-effort */ }
+}
 
 // ---- Extract + validate result ------------------------------------------
 const endedAt = new Date().toISOString();
@@ -297,4 +320,99 @@ function printResult(obj) {
 function die(code, msg) {
   process.stderr.write(`repliclaw: ${msg}\n`);
   process.exit(code);
+}
+
+// ---- Exec runner (for deterministic tasks with `exec:` frontmatter) ------
+//
+// Resolves the exec path relative to the task skill dir, spawns it as a
+// child process with inputs on stdin and scoped env in process.env, and
+// returns its full stdout. The caller extracts <<RESULT>>{...}<<END>> from
+// the returned text, same as the replica path.
+//
+// `exec:` can be either:
+//   - a path to a .mjs / .js file (run via `node`)
+//   - a path to a shell script or native executable (run directly)
+//
+// Inputs are passed as JSON on stdin; env vars include REPLICLAW_RUN_ID,
+// REPLICLAW_TASK, REPLICLAW_TIMEOUT_SEC, plus the scoped creds.
+async function runExec({ ctx, exec }) {
+  const execPath = resolve(ctx.taskSkillDir, exec);
+  if (!existsSync(execPath)) {
+    throw new Error(`exec script not found: ${execPath}`);
+  }
+
+  const isNode = /\.m?js$/i.test(execPath);
+  const cmd = isNode ? "node" : execPath;
+  const argv = isNode ? [execPath] : [];
+
+  const parentPath = process.env.PATH || "/usr/bin:/bin";
+  const localBin = process.env.HOME ? `${process.env.HOME}/.local/bin` : null;
+  const augmentedPath = localBin && !parentPath.split(":").includes(localBin)
+    ? `${localBin}:${parentPath}`
+    : parentPath;
+
+  const childEnv = {
+    // Exec-mode tasks run under the parent's identity; they need baseline
+    // shell env (HOME for dotfile/token lookups, PATH for binaries, USER
+    // for tools that stat effective user). Interface tokens are still
+    // stripped by scopeCreds above.
+    HOME: process.env.HOME,
+    PATH: augmentedPath,
+    USER: process.env.USER,
+    LANG: process.env.LANG || "C.UTF-8",
+    TMPDIR: process.env.TMPDIR || "/tmp",
+    ...ctx.scopedEnv,
+    REPLICLAW_RUN_ID: ctx.runId,
+    REPLICLAW_TASK: ctx.taskName,
+    REPLICLAW_TIMEOUT_SEC: String(ctx.timeoutSec),
+  };
+
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(cmd, argv, {
+      env: childEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: ctx.taskSkillDir,
+    });
+
+    let stdout = "";
+    const timer = setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch {}
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 3000);
+      rejectPromise(new Error(`exec timed out after ${ctx.timeoutSec}s`));
+    }, ctx.timeoutSec * 1000);
+
+    child.stdout.on("data", (chunk) => {
+      const s = chunk.toString();
+      stdout += s;
+      ctx.logSink.pushStdout(s);
+    });
+    child.stderr.on("data", (chunk) => {
+      ctx.logSink.pushStderr(chunk.toString());
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      rejectPromise(err);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (signal) {
+        rejectPromise(new Error(`exec killed by signal ${signal}`));
+        return;
+      }
+      // Exit code non-zero is NOT fatal — the script may have emitted a
+      // valid error envelope and then exited non-zero to signal failure
+      // to outer orchestrators. We only care about whether stdout has a
+      // <<RESULT>> marker; validation happens downstream.
+      resolvePromise(stdout);
+    });
+
+    // Feed inputs on stdin.
+    try {
+      child.stdin.write(JSON.stringify(ctx.inputsObj));
+      child.stdin.end();
+    } catch (e) {
+      clearTimeout(timer);
+      rejectPromise(e);
+    }
+  });
 }
