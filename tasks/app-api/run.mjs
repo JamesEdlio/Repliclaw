@@ -117,11 +117,15 @@ const DASHBOARD_DISPLAY = {
 const runId = process.env.REPLICLAW_RUN_ID || "run_unknown";
 const inputs = readInputsFromStdin();
 const dryRun = inputs.dry_run === true;
+const triggeredBy = typeof inputs.triggered_by === "string" && inputs.triggered_by
+  ? inputs.triggered_by
+  : null;
 
 const ctx = {
   runId,
   ticketKey: inputs.ticket_key,
   dryRun,
+  triggeredBy,
   forceRerun: inputs.force_rerun === true,
   providerOverride: inputs.provider || null,
   actions: [],
@@ -142,6 +146,7 @@ try {
     note: `fatal: ${err.message}`,
     skill_version: SKILL_VERSION,
     dry_run: dryRun,
+    triggered_by: triggeredBy,
   });
   process.exit(1);
 }
@@ -565,9 +570,11 @@ function resolveRecipients(ticket) {
   const toList = [pocEmail];
   const ccList = [];
   const reporterEmail = ticket.reporter?.email?.trim();
+  const senderEmail = (process.env.GMAIL_FROM || "edith@edlio.com").match(/[\w.+-]+@[\w.-]+/)?.[0]?.toLowerCase() || "edith@edlio.com";
   if (reporterEmail && isValidEmail(reporterEmail) && reporterEmail.toLowerCase().endsWith("@edlio.com")) {
-    // Avoid self-CC if POC is the reporter.
-    if (reporterEmail.toLowerCase() !== pocEmail.toLowerCase()) {
+    // Avoid self-CC if POC is the reporter, and never CC the sender (edith).
+    const lower = reporterEmail.toLowerCase();
+    if (lower !== pocEmail.toLowerCase() && lower !== senderEmail) {
       ccList.push(reporterEmail);
     }
   }
@@ -628,10 +635,11 @@ function renderEmailTemplate(templateFile, vars) {
 
 function buildCommentBody({ providerDisplay, to, cc, dryRun }) {
   const lines = [];
-  const prefix = dryRun ? "[dry-run] Would send" : "Sent";
-  lines.push(`${prefix} ${providerDisplay} API setup email to ${to.join(", ")}${cc.length ? ` (cc ${cc.join(", ")})` : ""}.`);
+  const actor = triggeredBy ? `${triggeredBy} (via Edith)` : "Edith";
+  const verb = dryRun ? "would send" : "sent";
+  lines.push(`${actor} ${verb} ${providerDisplay} API setup email to ${to.join(", ")}${cc.length ? ` (cc ${cc.join(", ")})` : ""}.`);
   lines.push("");
-  lines.push(`${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${new Date().toISOString()} skill_version=${SKILL_VERSION}`);
+  lines.push(`${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${new Date().toISOString()} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}`);
   return lines.join("\n");
 }
 
@@ -698,7 +706,7 @@ function recordError(where, err) {
 }
 
 function done(dataPayload) {
-  emitResult({ ...dataPayload, skill_version: SKILL_VERSION, dry_run: dryRun });
+  emitResult({ ...dataPayload, skill_version: SKILL_VERSION, dry_run: dryRun, triggered_by: triggeredBy });
   process.exit(0);
 }
 

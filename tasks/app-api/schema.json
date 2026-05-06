@@ -104,6 +104,10 @@
     },
     "dry_run": {
       "type": "boolean"
+    },
+    "triggered_by": {
+      "type": ["string", "null"],
+      "description": "Email of the human who dispatched this run."
     }
   }
 }

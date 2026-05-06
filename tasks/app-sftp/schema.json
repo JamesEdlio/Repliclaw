@@ -108,6 +108,10 @@
     "dry_run": {
       "type": "boolean",
       "description": "True if the task was invoked with dry_run=true."
+    },
+    "triggered_by": {
+      "type": ["string", "null"],
+      "description": "Email of the human who dispatched this run (best-effort, may be null for system/cron triggers)."
     }
   }
 }

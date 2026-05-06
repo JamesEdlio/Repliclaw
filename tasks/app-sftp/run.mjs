@@ -40,11 +40,15 @@ const MARKER_EVENT = "setup-sent";
 const runId = process.env.REPLICLAW_RUN_ID || "run_unknown";
 const inputs = readInputsFromStdin();
 const dryRun = inputs.dry_run === true;
+const triggeredBy = typeof inputs.triggered_by === "string" && inputs.triggered_by
+  ? inputs.triggered_by
+  : null;
 
 const ctx = {
   runId,
   ticketKey: inputs.ticket_key,
   dryRun,
+  triggeredBy,
   forceRerun: inputs.force_rerun === true,
   actions: [],
   notes: [],
@@ -62,6 +66,7 @@ try {
     note: `fatal: ${err.message}`,
     skill_version: SKILL_VERSION,
     dry_run: dryRun,
+    triggered_by: triggeredBy,
   });
   process.exit(1);
 }
@@ -127,7 +132,13 @@ async function main() {
 
   const cc = [];
   const reporterEmail = ticket.reporter?.email?.toLowerCase();
-  if (reporterEmail && reporterEmail.endsWith("@edlio.com") && !to.includes(reporterEmail)) {
+  const senderEmail = (process.env.GMAIL_FROM || "edith@edlio.com").match(/[\w.+-]+@[\w.-]+/)?.[0]?.toLowerCase() || "edith@edlio.com";
+  if (
+    reporterEmail &&
+    reporterEmail.endsWith("@edlio.com") &&
+    !to.includes(reporterEmail) &&
+    reporterEmail !== senderEmail
+  ) {
     cc.push(reporterEmail);
   }
 
@@ -266,9 +277,12 @@ async function main() {
   }
 
   // Step 8: POST Forge comment with marker
-  const markerLine = `${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${sentAt} skill_version=${SKILL_VERSION}`;
+  const markerLine = `${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${sentAt} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}`;
+  const attribution = triggeredBy
+    ? `${triggeredBy} (via Edith) sent the SFTP setup email.`
+    : `Edith sent the SFTP setup email.`;
   const commentBody = [
-    `SFTP setup email sent.`,
+    attribution,
     ``,
     `**To:** ${to.join(", ")}`,
     cc.length ? `**CC:** ${cc.join(", ")}` : null,
@@ -677,7 +691,7 @@ function recordError(where, err) {
 }
 
 function done(dataPayload) {
-  emitResult({ ...dataPayload, skill_version: SKILL_VERSION, dry_run: dryRun });
+  emitResult({ ...dataPayload, skill_version: SKILL_VERSION, dry_run: dryRun, triggered_by: triggeredBy });
   process.exit(0);
 }
 
