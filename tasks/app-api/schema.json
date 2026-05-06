@@ -1,0 +1,109 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "app-api data payload",
+  "description": "Data payload for the app-api Forge-native task (v0.1.0).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "ticket_key"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "wrong_type",
+        "already_sent",
+        "needs_input",
+        "declined",
+        "error",
+        "partial"
+      ],
+      "description": "High-level outcome of the task."
+    },
+    "ticket_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "type": ["string", "null"],
+      "description": "Canonical provider key the skill resolved to (e.g. 'powerschool', 'clever'). Null when status is needs_input/missing_provider."
+    },
+    "provider_source": {
+      "type": ["string", "null"],
+      "enum": [null, "input_override", "ticket_field"],
+      "description": "Where the provider was sourced from."
+    },
+    "declined_reason": {
+      "type": "string",
+      "description": "Human-readable reason when status is wrong_type / declined."
+    },
+    "routing_suggestion": {
+      "type": "string",
+      "description": "If declined due to wrong_type, a hint about who should handle it instead."
+    },
+    "missing": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Field names that need human input when status is needs_input."
+    },
+    "note": {
+      "type": "string",
+      "description": "Free-form explanation accompanying a non-ok status."
+    },
+    "prior_run": {
+      "type": ["object", "null"],
+      "description": "Populated when status is already_sent. Extracted from the prior [app-api] setup-sent marker comment.",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": { "type": ["string", "null"] },
+        "ts": { "type": ["string", "null"] },
+        "skill_version": { "type": ["string", "null"] },
+        "comment_id": { "type": ["string", "null"] },
+        "author": { "type": ["string", "null"] }
+      }
+    },
+    "outreach": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "email_to": {
+          "type": "array",
+          "items": { "type": "string", "format": "email" }
+        },
+        "email_cc": {
+          "type": "array",
+          "items": { "type": "string", "format": "email" }
+        },
+        "email_subject": { "type": ["string", "null"] },
+        "email_sent_at": { "type": ["string", "null"], "format": "date-time" },
+        "template": { "type": ["string", "null"] },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Short machine-readable reason tag when email was not sent (e.g. missing_poc_email, provider_not_supported, already_sent)."
+        }
+      }
+    },
+    "forge": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "comment_posted": { "type": "boolean" },
+        "comment_id": { "type": ["string", "null"] },
+        "status_transition": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "string" },
+            "to": { "type": "string" }
+          }
+        }
+      }
+    },
+    "skill_version": {
+      "type": "string"
+    },
+    "dry_run": {
+      "type": "boolean"
+    }
+  }
+}
