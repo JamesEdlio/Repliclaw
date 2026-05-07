@@ -60,6 +60,30 @@ async function fetchT(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   }
 }
 
+/**
+ * Retry an async fn with exponential backoff. Use for critical mutations
+ * AFTER the real side-effect (email sent) has happened, where losing the
+ * follow-up write means losing idempotency / audit trail.
+ *
+ * Defaults: 4 attempts, ~100ms/400ms/1600ms waits between.
+ */
+async function withRetry(label, fn, { attempts = 4, baseMs = 100 } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1) break;
+      const wait = baseMs * Math.pow(4, i);
+      // Don't spam recordNote — just stderr for log trail.
+      process.stderr.write(`[retry] ${label} attempt ${i + 1}/${attempts} failed: ${err.message}; sleeping ${wait}ms\n`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
 // ---- Bootstrap -----------------------------------------------------------
 
 const runId = process.env.REPLICLAW_RUN_ID || "run_unknown";
@@ -326,7 +350,12 @@ async function main() {
       details: { dry_run: true, ticket_key: ticket.key, marker: MARKER_EVENT },
     });
   } else {
-    const c = await forgePostComment(ticket.key, commentBody);
+    // Critical post-send write: retry aggressively. If we fail to persist
+    // the marker, the next run will re-send the email.
+    const c = await withRetry(
+      "forge.comment.create",
+      () => forgePostComment(ticket.key, commentBody),
+    );
     commentId = c.id;
     recordAction({
       type: "forge.comment.create",
@@ -350,7 +379,10 @@ async function main() {
     });
     transitioned = { from: fromStatus, to: toStatus };
   } else {
-    await forgePatchStatus(ticket.key, toStatus);
+    await withRetry(
+      "forge.ticket.transition",
+      () => forgePatchStatus(ticket.key, toStatus),
+    );
     recordAction({
       type: "forge.ticket.transition",
       status: "success",

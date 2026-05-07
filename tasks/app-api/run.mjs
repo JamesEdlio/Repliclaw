@@ -51,6 +51,28 @@ async function fetchT(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   }
 }
 
+/**
+ * Retry an async fn with exponential backoff. Use for critical writes
+ * AFTER the real side-effect (email sent) has happened. Losing the
+ * follow-up write costs us idempotency / audit trail, so we lean on
+ * retries to survive transient Forge/Railway hiccups.
+ */
+async function withRetry(label, fn, { attempts = 4, baseMs = 100 } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1) break;
+      const wait = baseMs * Math.pow(4, i);
+      process.stderr.write(`[retry] ${label} attempt ${i + 1}/${attempts} failed: ${err.message}; sleeping ${wait}ms\n`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
 // ---- Provider registry --------------------------------------------------
 //
 // Canonical key -> { template file, display name, friendly aliases }.
@@ -349,7 +371,10 @@ async function main() {
     });
   } else {
     try {
-      const c = await forgePostComment(ctx.ticketKey, commentBody);
+      const c = await withRetry(
+        "forge.comment.create",
+        () => forgePostComment(ctx.ticketKey, commentBody),
+      );
       commentId = c?.id || null;
       recordAction({
         type: "forge.comment.create",
@@ -382,7 +407,10 @@ async function main() {
       transitioned = { from: "BACKLOG", to: "INITIAL_CONTACT" };
     } else {
       try {
-        await forgePatchStatus(ctx.ticketKey, "INITIAL_CONTACT");
+        await withRetry(
+          "forge.ticket.transition",
+          () => forgePatchStatus(ctx.ticketKey, "INITIAL_CONTACT"),
+        );
         recordAction({
           type: "forge.ticket.transition",
           status: "success",
