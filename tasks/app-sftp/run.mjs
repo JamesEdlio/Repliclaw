@@ -35,6 +35,31 @@ const SHARE_EXPIRES_IN = "7d";
 const MARKER_TAG = "[app-sftp]";
 const MARKER_EVENT = "setup-sent";
 
+// Per-call HTTP timeouts. Node's fetch has no default; without these, a
+// stuck TLS handshake or silent TCP drop can hang the whole replica run
+// and block the bridge queue.
+const FETCH_TIMEOUT_MS = 30_000;  // reads
+const FETCH_WRITE_TIMEOUT_MS = 60_000;  // writes (FileMage user create, etc.)
+
+/**
+ * fetch with a hard AbortController timeout. Throws a readable error on
+ * timeout instead of hanging forever.
+ */
+async function fetchT(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`HTTP timeout after ${timeoutMs}ms: ${opts.method || "GET"} ${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ---- Bootstrap -----------------------------------------------------------
 
 const runId = process.env.REPLICLAW_RUN_ID || "run_unknown";
@@ -382,7 +407,7 @@ function forgeUrl(path) {
 }
 
 async function forgeGetTicket(key) {
-  const res = await fetch(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
+  const res = await fetchT(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
     headers: forgeHeaders(),
   });
   if (!res.ok) {
@@ -393,11 +418,11 @@ async function forgeGetTicket(key) {
 }
 
 async function forgePostComment(key, body) {
-  const res = await fetch(forgeUrl(`/api/tickets/${encodeURIComponent(key)}/comments`), {
+  const res = await fetchT(forgeUrl(`/api/tickets/${encodeURIComponent(key)}/comments`), {
     method: "POST",
     headers: forgeHeaders(),
     body: JSON.stringify({ body }),
-  });
+  }, FETCH_WRITE_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`forge POST comment -> HTTP ${res.status}: ${await res.text()}`);
   }
@@ -406,11 +431,11 @@ async function forgePostComment(key, body) {
 }
 
 async function forgePatchStatus(key, status) {
-  const res = await fetch(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
+  const res = await fetchT(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
     method: "PATCH",
     headers: forgeHeaders(),
     body: JSON.stringify({ status }),
-  });
+  }, FETCH_WRITE_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`forge PATCH status -> HTTP ${res.status}: ${await res.text()}`);
   }
@@ -458,7 +483,7 @@ function fileMageUrl(path) {
 
 async function fileMageFindUser(username) {
   // API ignores query filters; fetch all then filter client-side.
-  const res = await fetch(fileMageUrl(`/users/?limit=1000`), {
+  const res = await fetchT(fileMageUrl(`/users/?limit=1000`), {
     headers: fileMageHeaders(),
   });
   if (!res.ok) {
@@ -471,7 +496,7 @@ async function fileMageFindUser(username) {
 
 async function fileMageCreateUser({ username, endpointName }) {
   // Resolve endpoint name -> ID
-  const endpointsRes = await fetch(fileMageUrl(`/endpoints/?limit=100`), {
+  const endpointsRes = await fetchT(fileMageUrl(`/endpoints/?limit=100`), {
     headers: fileMageHeaders(),
   });
   if (!endpointsRes.ok) {
@@ -497,11 +522,11 @@ async function fileMageCreateUser({ username, endpointName }) {
     // No password — SSH-key-only users. Keys attached separately later
     // via filemage.key.attach action (handled by operator or follow-up skill).
   };
-  const res = await fetch(fileMageUrl(`/users/`), {
+  const res = await fetchT(fileMageUrl(`/users/`), {
     method: "POST",
     headers: fileMageHeaders(),
     body: JSON.stringify(payload),
-  });
+  }, FETCH_WRITE_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`filemage POST /users -> HTTP ${res.status}: ${await res.text()}`);
   }

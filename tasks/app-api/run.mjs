@@ -30,6 +30,27 @@ const SKILL_VERSION = "0.1.0";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
 
+// Per-call HTTP timeouts — Node's fetch has no default. Without these,
+// a stuck TLS handshake or silent TCP drop can hang the whole replica
+// run and block the bridge queue.
+const FETCH_TIMEOUT_MS = 30_000;
+const FETCH_WRITE_TIMEOUT_MS = 60_000;
+
+async function fetchT(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`HTTP timeout after ${timeoutMs}ms: ${opts.method || "GET"} ${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ---- Provider registry --------------------------------------------------
 //
 // Canonical key -> { template file, display name, friendly aliases }.
@@ -501,7 +522,7 @@ function forgeUrl(path) {
 }
 
 async function forgeGetTicket(key) {
-  const res = await fetch(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
+  const res = await fetchT(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
     headers: forgeHeaders(),
   });
   if (!res.ok) {
@@ -512,11 +533,11 @@ async function forgeGetTicket(key) {
 }
 
 async function forgePostComment(key, body) {
-  const res = await fetch(forgeUrl(`/api/tickets/${encodeURIComponent(key)}/comments`), {
+  const res = await fetchT(forgeUrl(`/api/tickets/${encodeURIComponent(key)}/comments`), {
     method: "POST",
     headers: forgeHeaders(),
     body: JSON.stringify({ body }),
-  });
+  }, FETCH_WRITE_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`forge POST comment -> HTTP ${res.status}: ${await res.text()}`);
   }
@@ -525,11 +546,11 @@ async function forgePostComment(key, body) {
 }
 
 async function forgePatchStatus(key, status) {
-  const res = await fetch(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
+  const res = await fetchT(forgeUrl(`/api/tickets/${encodeURIComponent(key)}`), {
     method: "PATCH",
     headers: forgeHeaders(),
     body: JSON.stringify({ status }),
-  });
+  }, FETCH_WRITE_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`forge PATCH status -> HTTP ${res.status}: ${await res.text()}`);
   }
