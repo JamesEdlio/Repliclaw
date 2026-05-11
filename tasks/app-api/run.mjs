@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.0";
+const SKILL_VERSION = "0.1.1";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
 
@@ -641,7 +641,30 @@ function buildTemplateVars(ticket, providerMeta) {
     dashboard_display: DASHBOARD_DISPLAY[ticket.dashboard] || "Edlio",
     school_name: ticket.schoolName || "",
     provider_display: providerMeta.displayName,
+    ...buildProviderTokens(ticket, providerMeta),
   };
+}
+
+// Provider-specific template tokens (e.g. {clever_api_link}). Mirrors
+// Diana's per-dashboard URL split so SIA dashboards send the SIA link.
+function buildProviderTokens(ticket, providerMeta) {
+  const dash = (ticket.dashboard || "EDLIO").toUpperCase();
+
+  if (providerMeta.templateFile === "clever.html") {
+    // Default to Edlio app link; SIA dashboards get the SIA app link.
+    if (dash === "SIA_US" || dash === "SIA_CA" || dash.startsWith("SIA")) {
+      return {
+        clever_api_link: "https://schools.clever.com/applications/add/schoolinfo-sync",
+        clever_api_link_text: "Add SIA to Clever",
+      };
+    }
+    return {
+      clever_api_link: "https://schools.clever.com/applications/add/edlio",
+      clever_api_link_text: "Add Edlio to Clever",
+    };
+  }
+
+  return {};
 }
 
 function derivePocFirstName(ticket) {
