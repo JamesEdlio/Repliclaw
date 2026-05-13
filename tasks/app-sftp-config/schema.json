@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "app-sftp-config result data",
+  "type": "object",
+  "required": ["status_reason", "ticket"],
+  "properties": {
+    "status_reason": {
+      "type": "string",
+      "enum": [
+        "configured",
+        "already_done",
+        "needs_input",
+        "needs_filemage",
+        "auth_failed",
+        "sftp_failed",
+        "edlio_failed",
+        "no_files",
+        "wrong_type"
+      ]
+    },
+    "skill_version": { "type": "string" },
+    "triggered_by": { "type": ["string", "null"] },
+    "mode": { "type": "string", "enum": ["v3", "v2"] },
+    "ticket": {
+      "type": "object",
+      "required": ["key"],
+      "properties": {
+        "key":          { "type": "string" },
+        "title":        { "type": ["string", "null"] },
+        "schoolName":   { "type": ["string", "null"] },
+        "sisProvider":  { "type": ["string", "null"] },
+        "dashboard":    { "type": ["string", "null"] },
+        "pocEmail":     { "type": ["string", "null"] }
+      }
+    },
+    "ftp_account": {
+      "type": ["object", "null"],
+      "properties": {
+        "id":                { "type": "integer" },
+        "userName":          { "type": "string" },
+        "districtId":        { "type": ["integer", "null"] },
+        "districtName":      { "type": ["string", "null"] },
+        "schemaMappingId":   { "type": ["integer", "null"] },
+        "enabled":           { "type": "boolean" },
+        "rolesApplied":      { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "schema_mapping": {
+      "type": ["object", "null"],
+      "properties": {
+        "id":          { "type": "integer" },
+        "name":        { "type": "string" },
+        "description": { "type": ["string", "null"] },
+        "action":      { "type": "string", "enum": ["created", "updated", "reused", "skipped"] },
+        "hasMultipleFiles":          { "type": "boolean" },
+        "organizationIdentifierInFiles": { "type": "boolean" },
+        "acceptedFileNames":         { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "csvs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["filename"],
+        "properties": {
+          "filename":        { "type": "string" },
+          "size_bytes":      { "type": "integer" },
+          "rows_sampled":    { "type": "integer" },
+          "column_count":    { "type": "integer" },
+          "headers":         { "type": "array", "items": { "type": "string" } },
+          "classified_role": { "type": ["string", "null"], "enum": ["student", "teacher", "staff", "parent", "guardian", "administrator", "relative", "multi", "classroom", "enrollment", null] },
+          "confidence":      { "type": "number" },
+          "skipped":         { "type": ["boolean", "null"] },
+          "skip_reason":     { "type": ["string", "null"] }
+        }
+      }
+    },
+    "role_mappings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "csv_file":           { "type": ["string", "null"] },
+          "auto_mapped":        { "type": "object", "additionalProperties": { "type": "string" } },
+          "low_confidence":     { "type": "array",  "items": { "type": "object" } },
+          "missing_required":   { "type": "array",  "items": { "type": "string" } }
+        }
+      }
+    },
+    "needs_input": {
+      "type": ["object", "null"],
+      "properties": {
+        "unclassified_files": { "type": "array", "items": { "type": "object" } },
+        "unmapped_fields":    { "type": "object" },
+        "summary":            { "type": "string" }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step", "message"],
+        "properties": {
+          "step":    { "type": "string" },
+          "message": { "type": "string" },
+          "code":    { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

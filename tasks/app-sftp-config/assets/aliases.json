@@ -1,0 +1,794 @@
+{
+  "_comment": "Edlio SchemaMapping field-name keys \u2192 canonical Edlio field + CSV-column aliases. Used by the fuzzy column matcher in app-sftp-config. Aliases derived from real production SchemaMapping samples (Franklinton/Arab/PowerSchool/JCampus/OneRoster) plus dashboards/csv-mapper/data.json.",
+  "person_fields": {
+    "sourcedIdFieldName": {
+      "label": "Unique ID",
+      "required": true,
+      "aliases": [
+        "sourcedid",
+        "sourcedId",
+        "unique_id",
+        "uniqueid",
+        "uuid",
+        "guid",
+        "person_id",
+        "personid",
+        "id"
+      ]
+    },
+    "studentIdFieldName": {
+      "label": "Student ID",
+      "required_for": [
+        "student"
+      ],
+      "aliases": [
+        "student_id",
+        "studentid",
+        "student_number",
+        "studentnumber",
+        "sis_id",
+        "sisid",
+        "school_id_for_student",
+        "permanent_student_id"
+      ]
+    },
+    "employeeIdFieldName": {
+      "label": "Employee ID",
+      "required_for": [
+        "staff",
+        "teacher",
+        "administrator"
+      ],
+      "aliases": [
+        "employee_id",
+        "employeeid",
+        "staff_id",
+        "staffid",
+        "emp_id",
+        "empid",
+        "teacher_id",
+        "teacherid"
+      ]
+    },
+    "alternateStudentIdFieldName": {
+      "label": "Alternate Student ID",
+      "aliases": [
+        "alternate_student_id",
+        "alt_student_id",
+        "altstudentid",
+        "alternative_student_number"
+      ]
+    },
+    "roleFieldName": {
+      "label": "Role",
+      "required": false,
+      "aliases": [
+        "role",
+        "user_type",
+        "usertype",
+        "type",
+        "role_name",
+        "rolename"
+      ]
+    },
+    "firstNameFieldName": {
+      "label": "First Name",
+      "required": true,
+      "aliases": [
+        "first_name",
+        "firstname",
+        "fname",
+        "first",
+        "given_name",
+        "givenname"
+      ]
+    },
+    "lastNameFieldName": {
+      "label": "Last Name",
+      "required": true,
+      "aliases": [
+        "last_name",
+        "lastname",
+        "lname",
+        "last",
+        "surname",
+        "family_name",
+        "familyname"
+      ]
+    },
+    "middleNameFieldName": {
+      "label": "Middle Name",
+      "aliases": [
+        "middle_name",
+        "middlename",
+        "mname",
+        "middle",
+        "middle_initial",
+        "middleinitial"
+      ]
+    },
+    "titleFieldName": {
+      "label": "Title",
+      "aliases": [
+        "title",
+        "salutation",
+        "honorific",
+        "prefix"
+      ]
+    },
+    "departmentFieldName": {
+      "label": "Department",
+      "aliases": [
+        "department",
+        "dept"
+      ]
+    },
+    "prefixFieldName": {
+      "label": "Prefix",
+      "aliases": [
+        "prefix",
+        "name_prefix"
+      ]
+    },
+    "nicknameFieldName": {
+      "label": "Nickname",
+      "aliases": [
+        "nickname",
+        "preferred_name",
+        "preferredname",
+        "nick"
+      ]
+    },
+    "userNameFieldName": {
+      "label": "Username",
+      "aliases": [
+        "username",
+        "user_name",
+        "login",
+        "login_id"
+      ]
+    },
+    "passwordFieldName": {
+      "label": "Password",
+      "aliases": [
+        "password",
+        "passwd",
+        "pwd"
+      ]
+    },
+    "emailFieldName": {
+      "label": "Email 1",
+      "required": true,
+      "aliases": [
+        "email",
+        "email_1",
+        "email1",
+        "primary_email",
+        "primaryemail",
+        "school_email",
+        "schoolemail",
+        "student_email",
+        "staff_email"
+      ]
+    },
+    "email2FieldName": {
+      "label": "Email 2",
+      "aliases": [
+        "email_2",
+        "email2",
+        "secondary_email",
+        "personal_email",
+        "alt_email",
+        "alternate_email"
+      ]
+    },
+    "email3FieldName": {
+      "label": "Email 3",
+      "aliases": [
+        "email_3",
+        "email3"
+      ]
+    },
+    "email4FieldName": {
+      "label": "Email 4",
+      "aliases": [
+        "email_4",
+        "email4"
+      ]
+    },
+    "email5FieldName": {
+      "label": "Email 5",
+      "aliases": [
+        "email_5",
+        "email5"
+      ]
+    },
+    "phoneFieldName": {
+      "label": "Phone 1",
+      "required": false,
+      "aliases": [
+        "phone",
+        "phone_1",
+        "phone1",
+        "primary_phone",
+        "phonenumber",
+        "phone_number",
+        "home_phone",
+        "homephone"
+      ]
+    },
+    "cellPhoneFieldName": {
+      "label": "Cell Phone",
+      "aliases": [
+        "cell",
+        "cell_phone",
+        "cellphone",
+        "mobile",
+        "mobile_phone",
+        "mobilephone",
+        "phone_2",
+        "phone2"
+      ]
+    },
+    "phone3FieldName": {
+      "label": "Phone 3",
+      "aliases": [
+        "phone_3",
+        "phone3",
+        "work_phone",
+        "workphone"
+      ]
+    },
+    "phone4FieldName": {
+      "label": "Phone 4",
+      "aliases": [
+        "phone_4",
+        "phone4"
+      ]
+    },
+    "phone5FieldName": {
+      "label": "Phone 5",
+      "aliases": [
+        "phone_5",
+        "phone5"
+      ]
+    },
+    "addressFieldName": {
+      "label": "Address",
+      "aliases": [
+        "address",
+        "street",
+        "street_address",
+        "address1",
+        "address_1",
+        "addr"
+      ]
+    },
+    "cityFieldName": {
+      "label": "City",
+      "aliases": [
+        "city",
+        "town"
+      ]
+    },
+    "stateFieldName": {
+      "label": "State",
+      "aliases": [
+        "state",
+        "province",
+        "region"
+      ]
+    },
+    "zipFieldName": {
+      "label": "Zip",
+      "aliases": [
+        "zip",
+        "zip_code",
+        "zipcode",
+        "postal_code",
+        "postalcode",
+        "postcode"
+      ]
+    },
+    "countryFieldName": {
+      "label": "Country",
+      "aliases": [
+        "country",
+        "country_code",
+        "countrycode"
+      ]
+    },
+    "imageUrlFieldName": {
+      "label": "Image URL",
+      "aliases": [
+        "image",
+        "image_url",
+        "imageurl",
+        "photo",
+        "photo_url",
+        "photourl",
+        "picture",
+        "picture_url"
+      ]
+    },
+    "homeLanguageFieldName": {
+      "label": "Home Language",
+      "aliases": [
+        "home_language",
+        "homelanguage",
+        "language",
+        "primary_language",
+        "primarylanguage",
+        "iso_language"
+      ]
+    },
+    "gradeFieldName": {
+      "label": "Grade",
+      "aliases": [
+        "grade",
+        "grade_level",
+        "gradelevel",
+        "grades",
+        "year",
+        "current_grade"
+      ]
+    },
+    "homeRoomFieldName": {
+      "label": "Home Room",
+      "aliases": [
+        "home_room",
+        "homeroom",
+        "hr"
+      ]
+    },
+    "busRouteAmFieldName": {
+      "label": "Bus Route AM",
+      "aliases": [
+        "bus_am",
+        "bus_route_am",
+        "busrouteam",
+        "morning_bus"
+      ]
+    },
+    "busRoutePmFieldName": {
+      "label": "Bus Route PM",
+      "aliases": [
+        "bus_pm",
+        "bus_route_pm",
+        "busroutepm",
+        "afternoon_bus"
+      ]
+    },
+    "hallPassPinFieldName": {
+      "label": "Hall Pass PIN",
+      "aliases": [
+        "hall_pass_pin",
+        "hallpasspin",
+        "pin"
+      ]
+    },
+    "organizationIdFieldName": {
+      "label": "Organization ID",
+      "required": true,
+      "aliases": [
+        "org_id",
+        "orgid",
+        "organization_id",
+        "organizationid",
+        "orgsourcedids",
+        "orgsourcedid",
+        "org_sourced_ids",
+        "school_id",
+        "schoolid",
+        "school_code",
+        "schoolcode",
+        "building_id",
+        "buildingid",
+        "site_id",
+        "siteid"
+      ]
+    },
+    "relationshipIdsFieldName": {
+      "label": "Relationship IDs",
+      "aliases": [
+        "relationship_id",
+        "relationshipid",
+        "relationship_ids",
+        "relationshipids",
+        "parent_ids",
+        "parentids",
+        "guardian_ids",
+        "guardianids",
+        "student_ids",
+        "studentids",
+        "agents",
+        "agent_ids"
+      ]
+    },
+    "lastModifiedFieldName": {
+      "label": "Last Modified",
+      "aliases": [
+        "last_modified",
+        "lastmodified",
+        "modified",
+        "updated_at",
+        "updatedat",
+        "modified_date"
+      ]
+    },
+    "enabledFieldName": {
+      "label": "Enabled",
+      "aliases": [
+        "enabled",
+        "active",
+        "is_active",
+        "isactive",
+        "status"
+      ]
+    },
+    "disabledFieldName": {
+      "label": "Disabled",
+      "aliases": [
+        "disabled",
+        "inactive",
+        "is_inactive"
+      ]
+    },
+    "classroomIdsFieldName": {
+      "label": "Classroom IDs",
+      "aliases": [
+        "classroom_ids",
+        "classroomids",
+        "class_ids",
+        "classids",
+        "section_ids",
+        "sectionids"
+      ]
+    }
+  },
+  "role_required_fields": {
+    "_comment": "Edlio internal field-name keys that MUST be present (non-empty) for the role to be considered fully mapped.",
+    "student": [
+      "sourcedIdFieldName",
+      "studentIdFieldName",
+      "firstNameFieldName",
+      "lastNameFieldName",
+      "emailFieldName",
+      "organizationIdFieldName"
+    ],
+    "teacher": [
+      "sourcedIdFieldName",
+      "employeeIdFieldName",
+      "firstNameFieldName",
+      "lastNameFieldName",
+      "emailFieldName",
+      "organizationIdFieldName"
+    ],
+    "administrator": [
+      "sourcedIdFieldName",
+      "employeeIdFieldName",
+      "firstNameFieldName",
+      "lastNameFieldName",
+      "emailFieldName",
+      "organizationIdFieldName"
+    ],
+    "staff": [
+      "sourcedIdFieldName",
+      "firstNameFieldName",
+      "lastNameFieldName",
+      "emailFieldName",
+      "organizationIdFieldName"
+    ],
+    "parent": [
+      "sourcedIdFieldName",
+      "firstNameFieldName",
+      "lastNameFieldName",
+      "emailFieldName",
+      "organizationIdFieldName"
+    ],
+    "guardian": [
+      "sourcedIdFieldName",
+      "firstNameFieldName",
+      "lastNameFieldName",
+      "emailFieldName",
+      "organizationIdFieldName"
+    ],
+    "relative": [
+      "sourcedIdFieldName",
+      "firstNameFieldName",
+      "lastNameFieldName",
+      "organizationIdFieldName"
+    ],
+    "classroom": [
+      "fileName",
+      "organizationIdFieldName",
+      "nameFieldName",
+      "sourceIdFieldName"
+    ],
+    "enrollment": [
+      "fileName",
+      "personSourceIdField",
+      "classroomSourceIdField"
+    ]
+  },
+  "role_classification_signals": {
+    "_comment": "Heuristics for tagging a CSV file with a role. (filename_patterns OR column_signals) all must vote.",
+    "student": {
+      "filename_patterns": [
+        "student",
+        "students",
+        "stu_",
+        "kids",
+        "kid_",
+        "pupil"
+      ],
+      "column_signals": [
+        "student_id",
+        "studentid",
+        "studentnumber",
+        "grade",
+        "gradelevel",
+        "homeroom"
+      ]
+    },
+    "teacher": {
+      "filename_patterns": [
+        "teacher",
+        "teachers",
+        "tch_",
+        "instructor"
+      ],
+      "column_signals": [
+        "teacher_id",
+        "teacherid",
+        "department"
+      ]
+    },
+    "staff": {
+      "filename_patterns": [
+        "staff",
+        "staffs",
+        "stf_",
+        "employee",
+        "employees",
+        "personnel"
+      ],
+      "column_signals": [
+        "employee_id",
+        "employeeid",
+        "staff_id"
+      ]
+    },
+    "parent": {
+      "filename_patterns": [
+        "parent",
+        "parents",
+        "guardian",
+        "guardians",
+        "contacts",
+        "contact"
+      ],
+      "column_signals": [
+        "relationship_id",
+        "student_ids",
+        "agent_ids",
+        "studentids"
+      ]
+    },
+    "administrator": {
+      "filename_patterns": [
+        "admin",
+        "administrators",
+        "principal"
+      ],
+      "column_signals": [
+        "accountype",
+        "account_type",
+        "principal"
+      ]
+    },
+    "relative": {
+      "filename_patterns": [
+        "relative",
+        "relatives",
+        "family"
+      ],
+      "column_signals": [
+        "relative_id"
+      ]
+    },
+    "multi": {
+      "filename_patterns": [
+        "users",
+        "people",
+        "persons",
+        "user",
+        "person",
+        "all_users",
+        "directory",
+        "roster"
+      ],
+      "column_signals": [
+        "role",
+        "user_type",
+        "usertype"
+      ]
+    },
+    "classroom": {
+      "filename_patterns": [
+        "classes",
+        "classroom",
+        "classrooms",
+        "sections",
+        "courses"
+      ],
+      "column_signals": [
+        "classsourcedid",
+        "classroom_id",
+        "section_id",
+        "title",
+        "course_name"
+      ]
+    },
+    "enrollment": {
+      "filename_patterns": [
+        "enrollments",
+        "enrollment",
+        "roster",
+        "rosters",
+        "studentclasses",
+        "studentsectionassignments"
+      ],
+      "column_signals": [
+        "usersourcedid",
+        "classsourcedid",
+        "user_sourced_id",
+        "class_sourced_id"
+      ]
+    }
+  },
+  "classroom_fields": {
+    "fileName": {
+      "label": "File name (filename)",
+      "required": true,
+      "aliases": []
+    },
+    "organizationIdFieldName": {
+      "label": "School / Org ID",
+      "required": true,
+      "aliases": [
+        "schoolsourcedid",
+        "school_sourced_id",
+        "school_id",
+        "schoolid",
+        "org_id",
+        "orgid",
+        "organization_id",
+        "buildingcode",
+        "building_code",
+        "site_id",
+        "siteid",
+        "campus_id",
+        "campusid"
+      ]
+    },
+    "nameFieldName": {
+      "label": "Class Name / Title",
+      "required": true,
+      "aliases": [
+        "title",
+        "name",
+        "class_name",
+        "classname",
+        "course_name",
+        "coursename",
+        "section_name",
+        "sectionname"
+      ]
+    },
+    "sourceIdFieldName": {
+      "label": "Class Sourced ID",
+      "required": true,
+      "aliases": [
+        "sourcedid",
+        "sourced_id",
+        "class_sourced_id",
+        "classsourcedid",
+        "section_sourced_id",
+        "sectionsourcedid",
+        "id",
+        "class_id",
+        "classid",
+        "section_id",
+        "sectionid",
+        "course_id",
+        "courseid"
+      ]
+    },
+    "descriptionFieldName": {
+      "label": "Description / Period",
+      "required": false,
+      "aliases": [
+        "description",
+        "desc",
+        "periods",
+        "period",
+        "subject",
+        "course_description"
+      ]
+    },
+    "disabledFieldName": {
+      "label": "Disabled flag",
+      "required": false,
+      "aliases": [
+        "disabled",
+        "inactive",
+        "deleted"
+      ]
+    },
+    "iconIdFieldName": {
+      "label": "Icon ID",
+      "required": false,
+      "aliases": [
+        "icon_id",
+        "iconid"
+      ]
+    },
+    "iconExternalLinkFieldName": {
+      "label": "Icon External Link",
+      "required": false,
+      "aliases": [
+        "icon_url",
+        "icon_link",
+        "icon_external_link"
+      ]
+    }
+  },
+  "enrollment_fields": {
+    "fileName": {
+      "label": "File name (filename)",
+      "required": true,
+      "aliases": []
+    },
+    "personSourceIdField": {
+      "label": "Person Sourced ID",
+      "required": true,
+      "aliases": [
+        "usersourcedid",
+        "user_sourced_id",
+        "person_sourced_id",
+        "personsourcedid",
+        "student_sourced_id",
+        "studentsourcedid",
+        "user_id",
+        "userid",
+        "person_id",
+        "personid",
+        "student_id",
+        "studentid",
+        "employee_id",
+        "employeeid",
+        "sourcedid",
+        "sourced_id"
+      ]
+    },
+    "classroomSourceIdField": {
+      "label": "Classroom Sourced ID",
+      "required": true,
+      "aliases": [
+        "classsourcedid",
+        "class_sourced_id",
+        "classroom_sourced_id",
+        "classroomsourcedid",
+        "section_sourced_id",
+        "sectionsourcedid",
+        "class_id",
+        "classid",
+        "classroom_id",
+        "classroomid",
+        "section_id",
+        "sectionid"
+      ]
+    }
+  }
+}

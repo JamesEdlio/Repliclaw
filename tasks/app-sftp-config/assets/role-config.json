@@ -1,0 +1,191 @@
+{
+  "_comment": "Per-role sync config spec. V3 default. Locked 2026-05-12 by James. Source: knowledge/edlioapp-role-config.md",
+  "v3": {
+    "studentSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 1, "name": "Student" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": true,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "administratorSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": true,
+      "accountType": { "id": 27, "name": "Administrator (Access+ Full w/Mass Comm)" },
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 4, "name": "Administrator" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "teacherSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": true,
+      "accountType": { "id": 30, "name": "Teachers (Access+ /w Mass Comm)" },
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 2, "name": "Teacher" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": true,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "staffSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 8, "name": "Staff" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": true,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "parentSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 3, "name": "Parent/Guardian" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "guardianSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 3, "name": "Parent/Guardian" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "relativeSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 10, "name": "Family" },
+      "skipWithMissingSourceId": true,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "_disabled_roles": [
+      "aideSettings",
+      "otherParentSettings",
+      "alumniSettings",
+      "memberSettings",
+      "volunteerSettings",
+      "otherCommunitySettings"
+    ]
+  },
+  "v2": {
+    "studentSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 1, "name": "Student" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": true,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "administratorSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": true,
+      "accountType": { "id": 3, "name": "Administrator (Access+ Full)" },
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 4, "name": "Administrator" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "teacherSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": true,
+      "accountType": { "id": 4, "name": "Teachers (Access+)" },
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 2, "name": "Teacher" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": true,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "staffSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 8, "name": "Staff" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": true,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "parentSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 3, "name": "Parent/Guardian" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "guardianSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 3, "name": "Parent/Guardian" },
+      "skipWithMissingSourceId": false,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "relativeSettings": {
+      "syncEnabled": true,
+      "createDashboardAccount": false,
+      "accountType": null,
+      "createSecuredAccessAppUser": true,
+      "appRole": { "id": 10, "name": "Family" },
+      "skipWithMissingSourceId": true,
+      "mergeBySourceId": true,
+      "disableMissing": false,
+      "sendInvite": false,
+      "sendConfirm": false
+    },
+    "_disabled_roles": [
+      "aideSettings",
+      "otherParentSettings",
+      "alumniSettings",
+      "memberSettings",
+      "volunteerSettings",
+      "otherCommunitySettings"
+    ]
+  }
+}
