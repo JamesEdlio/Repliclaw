@@ -169,13 +169,17 @@ async function main() {
     to.push(ticket.pocEmail.trim().toLowerCase());
   }
   if (to.length === 0) {
+    const reason = ticket.source === "JIRA"
+      ? "Jira-synced ticket has no structured POC email. Edit the Forge ticket to add pocEmail, then rerun."
+      : "Ticket has no pocEmail. Edit the ticket and retry.";
+    recordNote(`needs_input: missing pocEmail — ${reason}`);
+    recordError("missingpocemail", new Error(reason));
     return done({
       status: "needs_input",
       ticket_key: ticket.key,
       missing: ["pocEmail"],
-      note: ticket.source === "JIRA"
-        ? "Jira-synced ticket has no structured POC email. Edit the Forge ticket to add pocEmail, then rerun."
-        : "Ticket has no pocEmail. Edit the ticket and retry.",
+      note: reason,
+      reason,
     });
   }
 
