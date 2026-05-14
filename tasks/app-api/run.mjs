@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.1";
+const SKILL_VERSION = "0.1.2";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
 
@@ -617,16 +617,21 @@ function resolveRecipients(ticket) {
     return { toList: [], ccList: [], missingReason: "pocEmail" };
   }
   const toList = [pocEmail];
-  const ccList = [];
-  const reporterEmail = ticket.reporter?.email?.trim();
   const senderEmail = (process.env.GMAIL_FROM || "edith@edlio.com").match(/[\w.+-]+@[\w.-]+/)?.[0]?.toLowerCase() || "edith@edlio.com";
-  if (reporterEmail && isValidEmail(reporterEmail) && reporterEmail.toLowerCase().endsWith("@edlio.com")) {
-    // Avoid self-CC if POC is the reporter, and never CC the sender (edith).
-    const lower = reporterEmail.toLowerCase();
-    if (lower !== pocEmail.toLowerCase() && lower !== senderEmail) {
-      ccList.push(reporterEmail);
+  const pocLower = pocEmail.toLowerCase();
+
+  // CC the assignee — the operator who owns the ticket and needs to
+  // follow the thread. Skip if no assignee, if it's the POC, or if
+  // it's the sender (edith).
+  const ccList = [];
+  const assigneeEmail = ticket.assignee?.email?.trim();
+  if (assigneeEmail && isValidEmail(assigneeEmail)) {
+    const lower = assigneeEmail.toLowerCase();
+    if (lower !== senderEmail && lower !== pocLower) {
+      ccList.push(assigneeEmail);
     }
   }
+
   return { toList, ccList, missingReason: null };
 }
 
