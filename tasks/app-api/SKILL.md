@@ -1,6 +1,6 @@
 ---
 name: app-api
-version: 0.1.2
+version: 0.1.3
 description: Send the App-API setup email for a Forge ticket. Provider-aware — renders the right setup-guide email per API provider (PowerSchool, Clever, Aeries, Sylogist, etc.), sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -101,7 +101,7 @@ If found and `force_rerun !== true`, emit `status=skipped` with `outreach.prior_
 
 ### Step 4 — Resolve recipients
 - **TO**: `ticket.pocEmail`. If missing, emit `status=needs_input` with `missing: ["pocEmail"]`.
-- **CC**: `ticket.assignee.email` if set (so the Edlio operator who owns the ticket follows the client thread). Skip if the assignee is the POC themselves or is the sender (edith@edlio.com). Reporters are NOT auto-CC'd — assignment is the signal for "who needs to see this thread."
+- **CC**: both `ticket.reporter.email` and `ticket.assignee.email` (so the team that owns the ticket follows the client thread). Skip either if it equals the POC, the sender (edith@edlio.com), or is already in CC. Dedup is case-insensitive. If only one of the two is set, CC just that one.
 
 All recipients pass `isValidEmail()` sanity check.
 

@@ -1,6 +1,6 @@
 ---
 name: app-sftp
-version: 0.2.1
+version: 0.2.2
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -127,9 +127,10 @@ Collect recipient list:
 
 **CC list:**
 
-- If `ticket.assignee?.email` is set, add it to `cc` (so the Edlio operator who owns the ticket follows the client thread).
-- Skip if the assignee is the POC themselves or if it's the sender (edith@edlio.com).
-- Reporters and other team members are NOT auto-CC'd — assignment is the signal for "who needs to see this thread."
+- CC both `ticket.reporter?.email` and `ticket.assignee?.email` so the team that owns the ticket follows the client thread.
+- Skip if either is the POC themselves, the sender (edith@edlio.com), or already in the CC list (dedup is case-insensitive).
+- If only one of reporter/assignee is set, CC just that one. If both equal the POC or sender, CC is empty.
+- This intentionally over-includes rather than under-includes — missing a CC on outreach is more costly than an extra one.
 
 ### Step 4 — FileMage provision
 

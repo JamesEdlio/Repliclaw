@@ -27,7 +27,7 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.2.1";
+const SKILL_VERSION = "0.2.2";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
 const ONEPASSWORD_VAULT = "Agent: DI-Ana - SFTP";
@@ -183,18 +183,20 @@ async function main() {
     });
   }
 
-  // Build CC list. Just the assignee — the operator who owns the ticket
-  // and needs to follow the thread. Skip if no assignee, if it's the POC,
-  // or if it's the sender (edith).
+  // Build CC list: reporter + assignee — the team that owns the ticket
+  // and needs to follow the thread. Skip if either is the POC, the
+  // sender (edith), or already on the list.
   const senderEmail = (process.env.GMAIL_FROM || "edith@edlio.com").match(/[\w.+-]+@[\w.-]+/)?.[0]?.toLowerCase() || "edith@edlio.com";
   const toLower = to.map((e) => e.toLowerCase());
   const cc = [];
-  const assigneeEmail = ticket.assignee?.email?.trim();
-  if (assigneeEmail) {
-    const lower = assigneeEmail.toLowerCase();
-    if (lower !== senderEmail && !toLower.includes(lower)) {
-      cc.push(assigneeEmail);
-    }
+  const seen = new Set([senderEmail, ...toLower]);
+  for (const person of [ticket.reporter, ticket.assignee]) {
+    const email = person?.email?.trim();
+    if (!email) continue;
+    const lower = email.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    cc.push(email);
   }
 
   // Step 5: FileMage user provision / reuse

@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.2";
+const SKILL_VERSION = "0.1.3";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
 
@@ -620,16 +620,18 @@ function resolveRecipients(ticket) {
   const senderEmail = (process.env.GMAIL_FROM || "edith@edlio.com").match(/[\w.+-]+@[\w.-]+/)?.[0]?.toLowerCase() || "edith@edlio.com";
   const pocLower = pocEmail.toLowerCase();
 
-  // CC the assignee — the operator who owns the ticket and needs to
-  // follow the thread. Skip if no assignee, if it's the POC, or if
-  // it's the sender (edith).
+  // CC both reporter and assignee — the team that owns the ticket and
+  // needs to follow the thread. Skip if either is the POC, the sender
+  // (edith), or already in CC.
   const ccList = [];
-  const assigneeEmail = ticket.assignee?.email?.trim();
-  if (assigneeEmail && isValidEmail(assigneeEmail)) {
-    const lower = assigneeEmail.toLowerCase();
-    if (lower !== senderEmail && lower !== pocLower) {
-      ccList.push(assigneeEmail);
-    }
+  const seen = new Set([pocLower, senderEmail]);
+  for (const person of [ticket.reporter, ticket.assignee]) {
+    const email = person?.email?.trim();
+    if (!email || !isValidEmail(email)) continue;
+    const lower = email.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    ccList.push(email);
   }
 
   return { toList, ccList, missingReason: null };
