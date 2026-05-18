@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.1.0
+version: 0.2.0
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -94,43 +94,49 @@ uploaded their first sync batch.
 4. **Resolve Edlio FTP account.** Look up by `userName` =
    FileMage username derived from the ticket. Hard-fail with
    `needs_filemage` if the FTP account doesn't exist.
-5. **List + sample CSVs over SFTP.** SSH key already authorized
-   on the FileMage user (via `app-sftp` skill). Connect, list files
-   in the user's home, download first ~50 rows of each `.csv` to a
-   scratch dir. Skip files that are empty or non-CSV.
-6. **Classify each CSV by role.** Heuristic on filename + column
+5. **FileMage SSH-key preflight.** Fetch the FileMage user record
+   via `GET /users/{id}/` and inspect `keys[]`. If Edith's
+   fingerprint (`28:bd:3d:21:…`) is missing, `POST /users/{id}/keys/`
+   to attach `~/.ssh/filemage_ed25519.pub` so the next-step `sftp`
+   connect succeeds. Idempotent: skipped if already authorized.
+   Hard-fail with `filemage_key_failed` on POST failure.
+6. **List + sample CSVs over SFTP.** Connect to the FileMage user
+   (now authorized), list files in the user's home, download first
+   ~50 rows of each `.csv` to a scratch dir. Skip files that are
+   empty or non-CSV.
+7. **Classify each CSV by role.** Heuristic on filename + column
    profile (e.g. presence of `Student ID`, `Employee ID`, `Role`,
    `Relationship ID`). Multi-role files (single Users.csv with all
    people) are tagged `multi`. If any file is unclassified or
    ambiguous, return `needs_input` with `unclassified_files` and
    best-guess role.
-7. **Per-role column mapping.** For each active role, fuzzy-match
+8. **Per-role column mapping.** For each active role, fuzzy-match
    CSV column headers against the canonical Edlio field aliases
    (`assets/aliases.json`). Confidence ≥ 0.85 = auto-accept,
    anything lower needs review. Required-field misses on an active
    role return `needs_input` with `unmapped_fields` and best
    guesses.
-8. **Build SchemaMapping payload.** Per-role `*Settings` blocks
+9. **Build SchemaMapping payload.** Per-role `*Settings` blocks
    with field-name → CSV-column mappings. `name = ticket.schoolName`,
    `description = ticket.sisProvider`. `hasMultipleFiles` derived
    from CSV file count. `acceptedFileNames` = list of filenames
    actually present.
-9. **Upsert SchemaMapping.**
-   - If `schema_mapping_id` input was provided → fetch + update.
-   - Else search by `name` in `GetIndexListSchemaMappingModel` →
-     update if found.
-   - Else `CreateSchemaMapping`.
-10. **Apply per-role sync config to FTP account.** Overlay V3 (or
+10. **Upsert SchemaMapping.**
+    - If `schema_mapping_id` input was provided → fetch + update.
+    - Else search by `name` in `GetIndexListSchemaMappingModel` →
+      update if found.
+    - Else `CreateSchemaMapping`.
+11. **Apply per-role sync config to FTP account.** Overlay V3 (or
     V2 if `mode=v2`) spec from `assets/role-config.json` onto FTP
     account `*Settings` blocks. If a `classes`/`classrooms` CSV is
     present, also flip `classroomSyncEnabled=true` +
     `deleteMissingClassrooms=true` on the FTP account; enrollments
     ride along automatically (no separate FTP-side toggle). Grade
     and lineItem syncs stay off in v0.1. Leave FTP `enabled` as-is.
-11. **Link SchemaMapping to FTP account.** Set `syncSchema = {id: …}`
+12. **Link SchemaMapping to FTP account.** Set `syncSchema = {id: …}`
     on the FTP account.
-12. **Save FTP account** via `UpdateFtpAccount`.
-13. **Post Forge comment** with marker, list of mapped roles,
+13. **Save FTP account** via `UpdateFtpAccount`.
+14. **Post Forge comment** with marker, list of mapped roles,
     SchemaMapping ID, dashboard link. Do **not** transition ticket.
 
 ## Statuses
@@ -141,9 +147,11 @@ uploaded their first sync batch.
 - `needs_input` — unclassified files, missing required fields, or
   district resolution failed. Envelope `data.needs_input` lists what
   the operator must supply via `field_overrides`/`role_assignments`.
-- `error` — unexpected failure (auth, SFTP, API). No mutations
-  rolled back; SchemaMapping/FTP-account changes are independent
-  steps and may be partially applied.
+- `error` — unexpected failure (auth, SFTP, FileMage key attach,
+  Edlio API). No mutations rolled back; SchemaMapping/FTP-account
+  changes are independent steps and may be partially applied.
+  `status_reason` distinguishes: `auth_failed`, `sftp_failed`,
+  `filemage_key_failed`, `edlio_failed`.
 
 ## Hard rules
 

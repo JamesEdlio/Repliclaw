@@ -14,6 +14,7 @@
         "auth_failed",
         "sftp_failed",
         "edlio_failed",
+        "filemage_key_failed",
         "no_files",
         "wrong_type"
       ]

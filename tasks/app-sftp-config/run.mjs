@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.0";
+const SKILL_VERSION = "0.2.0";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -42,6 +42,12 @@ const APPSFTP_MARKER_TAG = "[app-sftp]";  // upstream skill's marker — confirm
 
 const FETCH_TIMEOUT_MS = 30_000;
 const FETCH_WRITE_TIMEOUT_MS = 60_000;
+
+// Edith's filemage SSH key — fingerprint is stable, used to detect presence.
+// Hoisted to module top so it's available inside the top-level `await main()`
+// block (TDZ safety — see Step 4.5 / ensureFileMageKey()).
+const EDITH_KEY_FINGERPRINT_MD5 = "28:bd:3d:21:1f:e2:61:fd:fc:c2:11:e0:43:fc:18:c7";
+const EDITH_KEY_TITLE = "edith-agent";
 
 // Edlio API constants — hoisted to module top so the `await main()` block
 // (which runs before later top-level statements execute) can reach them.
@@ -217,6 +223,37 @@ async function main() {
       enabled: ftpAccount.enabled,
     },
   });
+
+  // -- Step 4.5: FileMage SSH-key preflight
+  // Ensure Edith's pubkey is authorized on this user's FileMage account
+  // before we try to sftp into it. Idempotent: skips if already present.
+  try {
+    const keyResult = await ensureFileMageKey(username);
+    recordAction({
+      type: "filemage.key.attach",
+      status: keyResult.alreadyHad ? "skipped" : "success",
+      ref: `filemage:user:${keyResult.user.id}`,
+      details: {
+        username,
+        fingerprint: EDITH_KEY_FINGERPRINT_MD5,
+        already_authorized: keyResult.alreadyHad,
+      },
+    });
+    if (keyResult.attached) {
+      recordNote(
+        `attached edith-agent pubkey to filemage user ${username} (id=${keyResult.user.id}) — was not previously authorized`,
+        "preflight",
+        "info"
+      );
+    }
+  } catch (err) {
+    recordError("filemage.key.attach", err);
+    return done({
+      status_reason: "filemage_key_failed",
+      ticket: ticketSummary(ticket),
+      ftp_account: ftpAccountSummary(ftpAccount),
+    }, "error");
+  }
 
   // -- Step 5: SFTP list + sample
   let csvs;
@@ -760,6 +797,109 @@ async function applyFtpAccountConfig({ ftpAccount, schemaMappingId, presentRoles
 
   await edlioApiCall("UpdateFtpAccount", { model: base }, { write: true });
   return applied;
+}
+
+// ==========================================================================
+// FileMage API — preflight SSH-key attach
+// ==========================================================================
+//
+// Before we try to sftp into a client FileMage user, ensure Edith's pubkey
+// is authorized on that account. The user object returned by GET /users/{id}/
+// includes a `keys: [{fingerprint, keyData, title, ...}]` array. If our
+// fingerprint is missing, POST a new key. Idempotent.
+
+// (EDITH_KEY_FINGERPRINT_MD5 and EDITH_KEY_TITLE hoisted to top of file.)
+
+function fileMageHeaders() {
+  const key = process.env.FILEMAGE_API_KEY;
+  if (!key) throw new Error("FILEMAGE_API_KEY not in env");
+  return { "filemage-api-token": key, "content-type": "application/json" };
+}
+
+function fileMageUrl(path) {
+  const base = process.env.FILEMAGE_API_URL ||
+    "https://sia-ftp-gw.centralus.cloudapp.azure.com";
+  return `${base.replace(/\/$/, "")}${path}`;
+}
+
+async function fileMageFindUser(username) {
+  // /users/ ignores query filters — fetch all then filter client-side.
+  const res = await fetchT(fileMageUrl(`/users/?limit=1000`), {
+    headers: fileMageHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`filemage GET /users -> HTTP ${res.status}`);
+  }
+  const body = await res.json();
+  const users = Array.isArray(body) ? body : body.results || [];
+  return users.find(u => u.username === username) || null;
+}
+
+async function fileMageGetUser(userId) {
+  // Single user fetch — includes `keys[]` array which is not always present
+  // on the list endpoint.
+  const res = await fetchT(fileMageUrl(`/users/${userId}/`), {
+    headers: fileMageHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`filemage GET /users/${userId}/ -> HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function fileMageAttachKey(userId, { keyData, title }) {
+  const payload = { keyData, title, create: false };
+  const res = await fetchT(fileMageUrl(`/users/${userId}/keys/`), {
+    method: "POST",
+    headers: fileMageHeaders(),
+    body: JSON.stringify(payload),
+  }, FETCH_WRITE_TIMEOUT_MS);
+  if (!res.ok) {
+    throw new Error(`filemage POST /users/${userId}/keys/ -> HTTP ${res.status}: ${await res.text()}`);
+  }
+  // FileMage returns HTTP 200 with an empty body on success — don't try to parse.
+  const text = await res.text();
+  if (!text) return { ok: true };
+  try { return JSON.parse(text); } catch { return { ok: true, raw: text }; }
+}
+
+function readEdithPubkey() {
+  // Public key is stable, read from the same path we use for sftp auth.
+  const pubKeyPath = (process.env.FILEMAGE_SSH_KEY || `${process.env.HOME || ""}/.ssh/filemage_ed25519`) + ".pub";
+  try {
+    return readFileSync(pubKeyPath, "utf8").trim();
+  } catch (err) {
+    throw new Error(`cannot read pubkey at ${pubKeyPath}: ${err.message}`);
+  }
+}
+
+/**
+ * Ensure Edith's SSH key is attached to the FileMage user for `username`.
+ * Returns { user, attached: boolean, alreadyHad: boolean }.
+ * - alreadyHad=true => key was already on the account (no-op)
+ * - attached=true   => key was missing and we just POSTed it
+ * Throws if user not found or POST fails.
+ */
+async function ensureFileMageKey(username) {
+  // Look up the user first (list endpoint), then refetch by id to get keys[].
+  const lite = await fileMageFindUser(username);
+  if (!lite) {
+    throw new Error(`filemage user not found: ${username}`);
+  }
+  const user = await fileMageGetUser(lite.id);
+  const keys = Array.isArray(user.keys) ? user.keys : [];
+  const hasOurKey = keys.some(k => k.fingerprint === EDITH_KEY_FINGERPRINT_MD5);
+
+  if (hasOurKey) {
+    return { user, attached: false, alreadyHad: true };
+  }
+
+  const pubkey = readEdithPubkey();
+  await fileMageAttachKey(user.id, {
+    keyData: pubkey,
+    title: EDITH_KEY_TITLE,
+  });
+  return { user, attached: true, alreadyHad: false };
 }
 
 // ==========================================================================
