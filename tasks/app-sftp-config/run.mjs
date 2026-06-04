@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.2.0";
+const SKILL_VERSION = "0.2.1";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -109,6 +109,28 @@ async function withRetry(label, fn, { attempts = 4, baseMs = 100 } = {}) {
 // Bootstrap
 // ==========================================================================
 
+/**
+ * Some inputs (field_overrides, role_assignments) are objects when dispatched
+ * directly via the API, but arrive as JSON *strings* when entered through the
+ * Forge RunModal (all config-field values are serialized to strings there).
+ * Accept both: parse strings into objects, pass objects through, treat blank
+ * or invalid as undefined so the `|| {}` fallback applies.
+ */
+function parseMaybeJson(val) {
+  if (val == null) return undefined;
+  if (typeof val === "object") return val;
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    if (!trimmed) return undefined;
+    try {
+      return JSON.parse(trimmed);
+    } catch (err) {
+      throw new Error(`Invalid JSON in input: ${err.message} — got: ${trimmed.slice(0, 120)}`);
+    }
+  }
+  return undefined;
+}
+
 const inputs = readInputsFromStdin();
 const dryRun = inputs.dry_run === true;
 const triggeredBy = typeof inputs.triggered_by === "string" && inputs.triggered_by
@@ -124,8 +146,8 @@ const ctx = {
   forceRerun: inputs.force_rerun === true,
   schemaMappingIdOverride: inputs.schema_mapping_id || null,
   filemageUsernameOverride: inputs.filemage_username || null,
-  fieldOverrides: inputs.field_overrides || {},
-  roleAssignments: inputs.role_assignments || {},
+  fieldOverrides: parseMaybeJson(inputs.field_overrides) || {},
+  roleAssignments: parseMaybeJson(inputs.role_assignments) || {},
   actions: [],
   notes: [],
   errors: [],
