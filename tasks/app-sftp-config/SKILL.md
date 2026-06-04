@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.2.1
+version: 0.3.0
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the

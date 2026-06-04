@@ -25,11 +25,12 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.2.1";
+const SKILL_VERSION = "0.3.0";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -144,6 +145,7 @@ const ctx = {
   triggeredBy,
   mode,
   forceRerun: inputs.force_rerun === true,
+  applyMapping: inputs.apply_mapping === true || inputs.apply_mapping === "true",
   schemaMappingIdOverride: inputs.schema_mapping_id || null,
   filemageUsernameOverride: inputs.filemage_username || null,
   fieldOverrides: parseMaybeJson(inputs.field_overrides) || {},
@@ -309,7 +311,38 @@ async function main() {
     }, "needs-input");
   }
 
-  // -- Step 6: classify each CSV by role
+  // -- Step 6: classify each CSV by role.
+  //
+  // Model pre-pass: hand the model all CSV headers + sample rows + the Edlio
+  // schema and let it classify roles AND map columns in one shot. The
+  // deterministic alias matcher (classifyCsv / mapRoleColumns) remains as the
+  // fallback when the model is unavailable or unsure. Operator overrides
+  // (role_assignments / field_overrides) always win.
+  let modelResult = null;
+  if (!Object.keys(ctx.roleAssignments).length || Object.keys(ctx.fieldOverrides).length === 0) {
+    try {
+      modelResult = await modelMapAll(csvs, ALIASES, {
+        activeRoles: ACTIVE_ROLES,
+        nonpersonRoles: NONPERSON_ROLES,
+      });
+    } catch (err) {
+      modelResult = { ok: false, reason: err.message };
+    }
+    recordAction({
+      type: "schema.model.map",
+      status: modelResult?.ok ? "success" : "skipped",
+      details: modelResult?.ok
+        ? {
+            model: modelResult.model,
+            files_classified: Object.keys(modelResult.classifications || {}).length,
+            roles_mapped: Object.keys(modelResult.mappings || {}).length,
+            dropped_hallucinated_columns: modelResult.dropped_hallucinated_columns || 0,
+          }
+        : { reason: modelResult?.reason || "model unavailable; using alias matcher" },
+    });
+  }
+  const modelClass = (modelResult?.ok && modelResult.classifications) || {};
+
   for (const f of csvs) {
     const assigned = ctx.roleAssignments[f.filename];
     if (assigned !== undefined) {
@@ -323,6 +356,18 @@ async function main() {
     f.classified_role = guess.role;
     f.confidence = guess.score;
     f.classification_via = guess.via;
+
+    // If the deterministic matcher was unsure but the model classified this
+    // file, adopt the model's role.
+    const unsureHeuristic =
+      f.classified_role === undefined ||
+      (f.classification_via === "heuristic" && (f.confidence || 0) < 0.5);
+    if (unsureHeuristic && Object.prototype.hasOwnProperty.call(modelClass, f.filename)) {
+      const mrole = modelClass[f.filename];
+      f.classified_role = mrole === null ? null : mrole;
+      f.classification_via = "model";
+      f.confidence = 0.75;
+    }
   }
   recordAction({
     type: "csv.classify",
@@ -337,7 +382,7 @@ async function main() {
     },
   });
 
-  // Identify unclassified files (low confidence + no operator override).
+  // Identify unclassified files (still unsure even after model assist).
   const unclassified = csvs.filter(f =>
     f.classified_role === undefined ||
     (f.classification_via === "heuristic" && f.confidence < 0.5)
@@ -362,17 +407,42 @@ async function main() {
     }, "needs-input");
   }
 
-  // -- Step 7: per-role column mapping
-  const roleMappings = {};   // role -> { csv_file, auto_mapped, low_confidence, missing_required }
+  // -- Step 7: per-role column mapping.
+  // Per role: operator override > model mapping > alias matcher.
+  const modelMappings = (modelResult?.ok && modelResult.mappings) || {};
+  const sampleRowsByFile = Object.fromEntries(
+    csvs.map(f => [f.filename, f.sampleRows || []])
+  );
+  const roleMappings = {};   // role -> { csv_file, auto_mapped, low_confidence, missing_required, proposal?, source }
   const presentRoles = new Set();
+
+  const mapOneRole = (role, f) => {
+    const override = ctx.fieldOverrides[role];
+    // Model mapping for this role, if it mapped from this file (or any file
+    // when the model owns classification).
+    const me = modelMappings[role];
+    if (me && (!me.csv_file || me.csv_file === f.filename)) {
+      const mm = modelMappingToRoleMapping(role, me, ALIASES, sampleRowsByFile);
+      // Layer operator field_overrides on top of the model proposal.
+      if (override && typeof override === "object") {
+        for (const [field, ov] of Object.entries(override)) {
+          if (ov && ov.csv_column) mm.auto_mapped[field] = ov.csv_column;
+          else delete mm.auto_mapped[field];
+        }
+        mm.missing_required = ((ALIASES.role_required_fields || {})[role] || [])
+          .filter(fld => !mm.auto_mapped[fld]);
+      }
+      return mm;
+    }
+    // Fallback: deterministic alias matcher.
+    return mapRoleColumns(role, f, override);
+  };
 
   for (const f of csvs) {
     if (!f.classified_role || f.classified_role === "multi") {
-      // multi-role files are mapped against ALL person roles in turn (one
-      // CSV serving everyone). Classroom/enrollment never multi-shed.
       const roles = f.classified_role === "multi" ? ACTIVE_ROLES : [];
       for (const role of roles) {
-        roleMappings[role] = mapRoleColumns(role, f, ctx.fieldOverrides[role]);
+        roleMappings[role] = mapOneRole(role, f);
         presentRoles.add(role);
       }
       continue;
@@ -380,11 +450,12 @@ async function main() {
     if (FORCE_DISABLED_ROLES.includes(f.classified_role)) continue;
     const role = f.classified_role;
     if (!ACTIVE_ROLES.includes(role) && !NONPERSON_ROLES.includes(role)) continue;
-    roleMappings[role] = mapRoleColumns(role, f, ctx.fieldOverrides[role]);
+    roleMappings[role] = mapOneRole(role, f);
     presentRoles.add(role);
   }
 
-  // Anything with missing required fields → needs_input.
+  // Anything with missing required fields → needs_input (true blocker even
+  // the model couldn't resolve; operator must supply field_overrides).
   const rolesNeedingInput = Object.entries(roleMappings).filter(
     ([_, m]) => m.missing_required.length > 0
   );
@@ -418,10 +489,45 @@ async function main() {
     details: Object.fromEntries(
       Object.entries(roleMappings).map(([role, m]) => [
         role,
-        { auto: Object.keys(m.auto_mapped).length, low_confidence: m.low_confidence.length },
+        { auto: Object.keys(m.auto_mapped).length, low_confidence: m.low_confidence.length, source: m.source || "alias" },
       ])
     ),
   });
+
+  // -- Step 7b: mapping-approval gate.
+  //
+  // The model proposed a complete mapping (all required fields filled). Before
+  // touching Edlio, park the proposal for human review unless the operator has
+  // explicitly approved (apply_mapping=true) or this is a dry run (which writes
+  // nothing anyway and is itself a form of preview).
+  const usedModel = Object.values(roleMappings).some(m => m.source === "model");
+  if (usedModel && !ctx.applyMapping && !ctx.forceRerun && !dryRun) {
+    return done({
+      status_reason: "awaiting_mapping_approval",
+      ticket: ticketSummary(ticket),
+      ftp_account: ftpAccountSummary(ftpAccount),
+      csvs: csvs.map(csvSummary),
+      mapping_proposal: {
+        model: modelResult?.model || null,
+        roles: Object.fromEntries(
+          Object.entries(roleMappings).map(([role, m]) => [
+            role,
+            {
+              csv_file: m.csv_file,
+              source: m.source || "alias",
+              fields: m.proposal || Object.entries(m.auto_mapped).map(([field, col]) => ({
+                field, csv_column: col, confidence: 1, rationale: "alias match",
+              })),
+            },
+          ])
+        ),
+        summary:
+          `Model proposed a mapping for ${Object.keys(roleMappings).length} role(s). ` +
+          `Review the columns below; click Apply mapping to write it to Edlio, ` +
+          `or rerun with field_overrides to correct any field.`,
+      },
+    }, "needs-input");
+  }
 
   // -- Step 8: build SchemaMapping payload
   const mappingPayload = buildSchemaMappingPayload({
@@ -1459,7 +1565,7 @@ function emitResult(dataPayload, outerStatusHint = null) {
   let outerStatus;
   if (outerStatusHint) outerStatus = outerStatusHint;
   else if (dataPayload.status_reason === "error" || failed > 0) outerStatus = "error";
-  else if (dataPayload.status_reason === "needs_input" || dataPayload.status_reason === "no_files") outerStatus = "needs-input";
+  else if (dataPayload.status_reason === "needs_input" || dataPayload.status_reason === "awaiting_mapping_approval" || dataPayload.status_reason === "no_files") outerStatus = "needs-input";
   else if (dataPayload.status_reason === "wrong_type") outerStatus = "declined";
   else outerStatus = "ok";
 
