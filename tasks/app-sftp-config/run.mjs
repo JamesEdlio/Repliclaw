@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.2";
+const SKILL_VERSION = "0.3.3";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1500,7 +1500,13 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
     acceptedFileNames,
   };
 
-  // Per-role *Settings blocks holding the field→column mappings only.
+  // Per-role *Settings blocks holding the field→column mappings.
+  // Edlio's CreateSchemaMapping validator requires a non-empty `fileName`
+  // in EVERY role's settings block (it's how the importer matches an upload
+  // to a role). `fileName` is not a CSV column and is not in the person-role
+  // required-field list, so it never gets mapped from headers — fill it
+  // deterministically from the role's source CSV. (Without this, every
+  // person role fails with "File name is empty in <Role> settings.")
   for (const role of ACTIVE_ROLES) {
     const settingsKey = `${role}Settings`;
     const m = roleMappings[role];
@@ -1508,7 +1514,9 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
       payload[settingsKey] = null;
       continue;
     }
-    payload[settingsKey] = { ...m.auto_mapped };
+    const block = { ...m.auto_mapped };
+    if (!block.fileName) block.fileName = m.csv_file || null;
+    payload[settingsKey] = block;
   }
 
   // Classroom sub-model: single object with {fileName, organizationIdField,
