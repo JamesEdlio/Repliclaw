@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.7";
+const SKILL_VERSION = "0.4.0";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -61,6 +61,38 @@ const ALIAS_AUTO_THRESHOLD = 0.85;
 // Person roles we sync. Each gets a *Settings block on both the SchemaMapping
 // and the FTP account.
 const ACTIVE_ROLES = ["student", "teacher", "staff", "parent", "guardian", "relative", "administrator"];
+
+// Map a free-text Role / UserType / Relationship value (as it appears in a
+// roster file) to one of our canonical person roles. Rosters use wildly varied
+// relationship labels — Father, Mother, Guardian, Grandparent, Aunt, Uncle,
+// Sibling, Stepparent, Surrogate Parent, Foster, etc. — that all describe a
+// family member tied to a student via a Relationship ID. Collapsing them to
+// parent/guardian/relative is what lets us actually sync families. Returns null
+// if the value maps to nothing recognizable.
+function canonicalRoleFromValue(raw) {
+  const v = String(raw || "").toLowerCase().trim();
+  if (!v) return null;
+  if (v.includes("student") || v.includes("pupil") || v.includes("learner")) return "student";
+  if (v.includes("teacher") || v.includes("faculty") || v.includes("instructor")) return "teacher";
+  if (v.includes("admin") || v.includes("principal") || v.includes("superintendent")) return "administrator";
+  if (v.includes("staff") || v.includes("employee") || v.includes("counselor") || v.includes("secretary")) return "staff";
+  if (v.includes("guardian")) return "guardian";
+  // Parental relationships (immediate caregivers).
+  if (/(^|\b)(parent|father|mother|mom|dad|stepfather|stepmother|step ?parent|step ?par|foster|surrogate)\b/.test(v)) return "parent";
+  // Extended-family / other relationships → relative.
+  if (/(grandparent|grandmother|grandfather|grandma|grandpa|aunt|uncle|sister|brother|sibling|cousin|niece|nephew|relative|other)/.test(v)) return "relative";
+  return null;
+}
+
+
+// Strip a trailing file extension from a CSV name. Edlio's schema-mapping
+// `fileName` fields use the bare name WITHOUT extension ("users", not
+// "users.csv") — confirmed against James's golden manual map (mapping 146,
+// Saline). Emitting the extension is harmless for matching in some cases but
+// diverges from the canonical shape, so we normalize everywhere.
+function stripExt(name) {
+  return String(name || "").replace(/\.[^.]+$/, "");
+}
 
 // Non-person sync entities. Each gets its own SchemaMapping sub-model + FTP-
 // account-level toggle. Grade/lineItem are deferred — different field shape.
@@ -460,6 +492,10 @@ async function main() {
 
   const roleMappings = {};   // role -> { csv_file, auto_mapped, low_confidence, missing_required, proposal?, source }
   const presentRoles = new Set();
+  // Index file objects by name so tie-break logic can inspect headers (e.g. to
+  // detect the relationship-bearing family file).
+  const csvFilesByName = new Map();
+  for (const f of csvs) csvFilesByName.set(f.filename, f);
 
   const mapOneRole = (role, f) => {
     const override = ctx.fieldOverrides[role];
@@ -507,6 +543,20 @@ async function main() {
     if (!cur) { roleMappings[role] = cand; return; }
     const candMissing = (cand.missing_required || []).length;
     const curMissing = (cur.missing_required || []).length;
+    // Combined-family-file preference (golden 146): for the STUDENT role, a file
+    // that carries a Relationship ID column (the family file, e.g. users.csv)
+    // MUST win over a thin student-only file (students.csv) — only the family
+    // file lets us also sync parents/guardians via the relationship link. This
+    // overrides the normal coverage/stability tie-breaks but never costs required
+    // coverage (handled by the missing-required checks below first).
+    const hasRel = (file) => (csvFilesByName.get(file)?.headers || []).some(h =>
+      /relationship/i.test(h) && /\bid\b|ids?$/i.test(h.replace(/[^a-z0-9]+/gi, " ")));
+    if (role === "student" && candMissing <= curMissing) {
+      const candRel = hasRel(cand.csv_file);
+      const curRel = hasRel(cur.csv_file);
+      if (candRel && !curRel) { roleMappings[role] = cand; if (cur._locked) cand._locked = false; return; }
+      if (!candRel && curRel && candMissing >= curMissing) return; // keep family file
+    }
     // A single-classified (authoritative) file is the preferred source for its
     // own role — but never at the cost of REQUIRED coverage. If the authoritative
     // file is missing required fields that a 'multi' file fully covers, take the
@@ -555,18 +605,25 @@ async function main() {
       return n === "role" || n === "user_type" || n === "usertype" || n === "person_type";
     });
     if (!roleHeader) return ACTIVE_ROLES;
-    const seen = new Set();
+    f.role_header = roleHeader;
+    // Collect the DISTINCT raw role-value strings that map to each canonical
+    // role, preserving original casing/spelling. Edlio's per-role settings block
+    // carries a `roleName` filter string (e.g. parent="Mother, Father") that the
+    // importer uses to select rows of that role from a shared family file. We
+    // reproduce that by joining the actual values seen. (Golden mapping 146.)
+    const valuesByCanon = {};
     for (const row of (f.sampleRows || [])) {
-      const raw = String(row?.[roleHeader] || "").toLowerCase().trim();
+      const raw = String(row?.[roleHeader] || "").trim();
       if (!raw) continue;
-      if (raw.includes("student")) seen.add("student");
-      else if (raw.includes("teacher") || raw.includes("faculty") || raw.includes("instructor")) seen.add("teacher");
-      else if (raw.includes("admin") || raw.includes("principal")) seen.add("administrator");
-      else if (raw.includes("parent")) seen.add("parent");
-      else if (raw.includes("guardian")) seen.add("guardian");
-      else if (raw.includes("relative")) seen.add("relative");
-      else if (raw.includes("staff") || raw.includes("employee")) seen.add("staff");
+      const canon = canonicalRoleFromValue(raw);
+      if (!canon) continue;
+      (valuesByCanon[canon] ||= new Set()).add(raw);
     }
+    f.role_values_by_canonical = {};
+    for (const [canon, set] of Object.entries(valuesByCanon)) {
+      f.role_values_by_canonical[canon] = Array.from(set);
+    }
+    const seen = new Set(Object.keys(valuesByCanon));
     const roles = ACTIVE_ROLES.filter(r => seen.has(r));
     return roles.length ? roles : ACTIVE_ROLES;
   };
@@ -734,7 +791,7 @@ async function main() {
     recordAction({
       type: "edlio.schemamapping.upsert",
       status: "skipped",
-      details: { dry_run: true, name: mappingPayload.name, action_planned: ctx.schemaMappingIdOverride ? "update" : "create_or_update" },
+      details: { dry_run: true, name: mappingPayload.name, action_planned: ctx.schemaMappingIdOverride ? "update" : "create_or_update", payload_preview: mappingPayload },
     });
     schemaMapping = { id: 0, name: mappingPayload.name, action: "skipped" };
   } else {
@@ -1405,13 +1462,55 @@ function readCsvSample(path, maxRows) {
 
   const parseLine = (line) => parseCsvLine(line, delim);
   const headers = parseLine(lines[0]).map(h => h.trim());
-  const rows = [];
-  for (let i = 1; i < lines.length && rows.length < maxRows; i++) {
-    const cells = parseLine(lines[i]);
-    if (cells.length === 0) continue;
+
+  // Parse a row line into an object keyed by header.
+  const toRow = (line) => {
+    const cells = parseLine(line);
+    if (cells.length === 0) return null;
     const row = {};
     for (let j = 0; j < headers.length; j++) row[headers[j]] = cells[j] ?? "";
-    rows.push(row);
+    return row;
+  };
+
+  // Role-diversified sampling: person rosters are often sorted by role (e.g.
+  // all Students first, then Parents/Guardians). A naive top-N sample then
+  // hides every non-student role and the file gets misclassified as a plain
+  // student file — dropping parents/relatives and their Relationship IDs.
+  // If a Role/UserType column exists, make sure the sample covers each distinct
+  // role value, scanning the whole file (cheap — we already read it).
+  const roleHeader = headers.find(h => {
+    const n = h.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    return n === "role" || n === "user_type" || n === "usertype" || n === "person_type" || n === "relationship";
+  });
+
+  if (roleHeader) {
+    const byValue = new Map(); // role-value (lowercased) -> rows[]
+    for (let i = 1; i < lines.length; i++) {
+      const row = toRow(lines[i]);
+      if (!row) continue;
+      const key = String(row[roleHeader] || "").toLowerCase().trim() || "__blank__";
+      if (!byValue.has(key)) byValue.set(key, []);
+      const bucket = byValue.get(key);
+      if (bucket.length < 4) bucket.push(row); // a few per distinct value is plenty
+    }
+    // Round-robin across distinct values so every role is represented even if
+    // maxRows is small relative to the number of distinct values.
+    const buckets = [...byValue.values()];
+    const rows = [];
+    let added = true;
+    for (let depth = 0; added && rows.length < maxRows; depth++) {
+      added = false;
+      for (const b of buckets) {
+        if (b[depth]) { rows.push(b[depth]); added = true; if (rows.length >= maxRows) break; }
+      }
+    }
+    return { headers, rows };
+  }
+
+  const rows = [];
+  for (let i = 1; i < lines.length && rows.length < maxRows; i++) {
+    const row = toRow(lines[i]);
+    if (row) rows.push(row);
   }
   return { headers, rows };
 }
@@ -1646,21 +1745,21 @@ function jaroDistance(a, b) {
 // ==========================================================================
 
 function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, presentRoles }) {
-  // Only declare files we actually classified to a role. Unknown/junk files
-  // (e.g. a stray testingfirewall.csv) must NOT appear in acceptedFileNames —
-  // Edlio's UpdateSchemaMapping validator 500s on an accepted file that has
-  // no corresponding role/sub-model mapping.
+  // Count the distinct source files we actually mapped (drives hasMultipleFiles).
+  // Golden 146 leaves acceptedFileNames EMPTY ([]) even with multiple files —
+  // the per-role/sub-model fileName fields are what bind files to roles, and a
+  // populated acceptedFileNames listing files that don't perfectly line up with
+  // mapped roles is what makes UpdateSchemaMapping 500. So: emit [] and derive
+  // hasMultipleFiles from the distinct mapped-file count.
   const mappedFileNames = new Set();
   for (const role of ACTIVE_ROLES) {
     const m = roleMappings[role];
-    if (m && presentRoles.has(role)) mappedFileNames.add(m.csv_file);
+    if (m && presentRoles.has(role)) mappedFileNames.add(stripExt(m.csv_file));
   }
-  if (roleMappings.classroom && presentRoles.has("classroom")) mappedFileNames.add(roleMappings.classroom.csv_file);
-  if (roleMappings.enrollment && presentRoles.has("enrollment")) mappedFileNames.add(roleMappings.enrollment.csv_file);
-  const acceptedFileNames = csvs
-    .map(c => c.filename)
-    .filter(name => mappedFileNames.has(name));
-  const hasMultipleFiles = acceptedFileNames.length > 1;
+  if (roleMappings.classroom && presentRoles.has("classroom")) mappedFileNames.add(stripExt(roleMappings.classroom.csv_file));
+  if (roleMappings.enrollment && presentRoles.has("enrollment")) mappedFileNames.add(stripExt(roleMappings.enrollment.csv_file));
+  const acceptedFileNames = [];
+  const hasMultipleFiles = mappedFileNames.size > 1;
 
   // organizationIdentifierInFiles: only true for genuine multi-org (district)
   // rollouts. The authoritative signal is the FTP account's
@@ -1691,6 +1790,42 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
   // required-field list, so it never gets mapped from headers — fill it
   // deterministically from the role's source CSV. (Without this, every
   // person role fails with "File name is empty in <Role> settings.")
+  // Index csv file objects by filename so we can read per-file role values
+  // (for the roleName filter string) and detect which file carries the
+  // relationship-link column (for adaptiveRelationship).
+  const csvByName = new Map();
+  for (const c of csvs) csvByName.set(c.filename, c);
+  const fileHasRelationshipCol = (fname) => {
+    const f = csvByName.get(fname);
+    if (!f) return false;
+    return (f.headers || []).some(h =>
+      /relationship/i.test(h) && /\bid\b|ids?$/i.test(h.replace(/[^a-z0-9]+/gi, " ")));
+  };
+  // Build the `roleName` filter string for a role from the distinct raw Role
+  // values observed in its source file (e.g. parent → "Mother, Father").
+  const roleNameFor = (role, fname) => {
+    const f = csvByName.get(fname);
+    const vals = f && f.role_values_by_canonical && f.role_values_by_canonical[role];
+    if (vals && vals.length) return vals.join(", ");
+    // Fallback: title-case the canonical role (student → "Student").
+    return role.charAt(0).toUpperCase() + role.slice(1);
+  };
+
+  // adaptiveRelationship: set TRUE on exactly one role — the role whose source
+  // file carries the relationship-link column. Golden 146 placed it on student
+  // (users.csv holds the Relationship ID, and student is sourced from users.csv).
+  // Preference order: student, then parent, then guardian, then any other role
+  // whose source file has the relationship column. Everyone else is false.
+  const REL_PREFERENCE = ["student", "parent", "guardian", "teacher", "staff", "relative", "administrator"];
+  let adaptiveRole = null;
+  for (const role of REL_PREFERENCE) {
+    const m = roleMappings[role];
+    if (m && presentRoles.has(role) && fileHasRelationshipCol(m.csv_file)) {
+      adaptiveRole = role;
+      break;
+    }
+  }
+
   for (const role of ACTIVE_ROLES) {
     const settingsKey = `${role}Settings`;
     const m = roleMappings[role];
@@ -1699,7 +1834,13 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
       continue;
     }
     const block = { ...m.auto_mapped };
-    if (!block.fileName) block.fileName = m.csv_file || null;
+    // fileName: bare name, NO extension (golden 146).
+    block.fileName = stripExt(block.fileName || m.csv_file || "");
+    // roleName filter string — how Edlio selects this role's rows out of a
+    // shared family/staff file.
+    if (!block.roleName) block.roleName = roleNameFor(role, m.csv_file);
+    // adaptiveRelationship: true only on the single relationship-bearing role.
+    block.adaptiveRelationship = (role === adaptiveRole);
     // Single-org account: Edlio must not attempt per-row org resolution.
     // Drop any org-id field mapping so the importer treats every row as
     // belonging to the one account org. Leaving it set while
@@ -1715,6 +1856,7 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
   const cmap = roleMappings.classroom;
   if (cmap && presentRoles.has("classroom")) {
     const cblock = { ...cmap.auto_mapped };
+    cblock.fileName = stripExt(cblock.fileName || cmap.csv_file || "");
     if (!organizationIdentifierInFiles) delete cblock.organizationIdFieldName;
     payload.classroomSchemaModel = cblock;
     payload.hasClassroomMapping = true;
@@ -1729,6 +1871,7 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
   const emap = roleMappings.enrollment;
   if (emap && presentRoles.has("enrollment")) {
     const eblock = { ...emap.auto_mapped };
+    eblock.fileName = stripExt(eblock.fileName || emap.csv_file || "");
     if (!organizationIdentifierInFiles) delete eblock.organizationIdFieldName;
     payload.enrollmentSchemaModels = [eblock];
   } else {

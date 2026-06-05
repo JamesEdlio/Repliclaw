@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.3.7
+version: 0.4.0
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -182,6 +182,27 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.4.0 — golden mapping 146 (James-validated) payload shape
+Schema-mapping payload builder rebuilt to reproduce Saline mapping id 146,
+which James manually created in the Edlio dashboard and we read back via API
+(fixture: research/edlioapp-recon/golden-schema-mapping-146-saline.json).
+Validated offline field-for-field against the golden:
+- `fileName` is bare — NO extension ("users", "staff", "classes", "enrollments").
+- `acceptedFileNames` is always `[]`; `hasMultipleFiles` derived from distinct
+  mapped-file count. (Populated acceptedFileNames was a 500 trigger.)
+- `organizationIdentifierInFiles` driven by the FTP account's
+  `organizationIdMappings` (non-empty = multi-org). Single school = false, and
+  every role's `organizationIdFieldName` is stripped when false.
+- Combined family file wins: a file with a Role column + Relationship ID is the
+  family file; it supplies student + parent + guardian and beats a thin
+  student-only file. (Prevents dropping parents/guardians.)
+- `roleName` filter string built from the distinct raw Role values in the
+  source file (parent -> "Mother, Father").
+- `adaptiveRelationship` true on exactly one role — the one whose source file
+  carries the Relationship ID (preference: student, parent, guardian, ...).
+NOTE: golden 146 had a guardian `fileName` typo of "user"; the builder emits the
+correct "users". SS-273 apply still blocked by the Edlio write/token outage.
 
 ### v0.3.4 — fileName pseudo-field + multi-promotion
 - `fileName` is never a model-mappable column. It is set deterministically to

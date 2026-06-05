@@ -12,7 +12,7 @@
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL =
   process.env.APP_SFTP_MAP_MODEL || "anthropic/claude-sonnet-4.5";
-const SAMPLE_ROWS_FOR_MODEL = 8; // headers + a few rows is plenty of signal
+const SAMPLE_ROWS_FOR_MODEL = 20; // diversified sample now covers role variety; give the model enough to see non-student rows
 const MODEL_TIMEOUT_MS = 60_000;
 
 /** Strip ```json … ``` (or ```` ``` ````) code fences some providers add. */
@@ -100,6 +100,17 @@ function buildPrompt(csvs, schemaSpec, activeRoles, nonpersonRoles, aliases) {
             "employee-id column (or null with a reason) specifically for the " +
             "teacher and administrator entries. classroom/enrollment are " +
             "non-person. Use null role to ignore a file.",
+          relationship_note:
+            "A roster file with a Relationship/Role column whose values include " +
+            "family terms (Father, Mother, Guardian, Grandparent, Aunt, Uncle, " +
+            "Sibling, Stepparent, Surrogate Parent, etc.) AND a Relationship ID / " +
+            "linking column is a FAMILY file: classify it 'multi' and emit " +
+            "entries for student AND parent (and guardian/relative if those terms " +
+            "appear). For the parent/guardian/relative entries, map the " +
+            "relationship-link column (e.g. 'Relationship ID') to the appropriate " +
+            "relationship field so families link to their students. Do NOT collapse " +
+            "such a file to a single 'student' role — that silently drops every " +
+            "parent and the family relationships.",
         },
         important_note:
           "NEVER emit a `fileName` field in your mappings — it is not a CSV " +
