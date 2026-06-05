@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.6";
+const SKILL_VERSION = "0.3.7";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1033,24 +1033,69 @@ async function upsertSchemaMapping(payload) {
   //   - If schema_mapping_id input was supplied → fetch + update
   //   - Else search by name → update if found
   //   - Else create
+  // Resilience: Edlio's UpdateSchemaMapping command has been observed 500ing
+  // across ALL mappings (server-side ApplicationException, even on a pure
+  // no-op update of an untouched mapping), while CreateSchemaMapping works.
+  // When Update fails, fall back to creating a fresh mapping and use its id —
+  // the FTP-account attach step links whichever id we return, so a broken or
+  // un-updatable existing mapping never blocks a rollout.
   if (ctx.schemaMappingIdOverride) {
-    return updateSchemaMapping(ctx.schemaMappingIdOverride, payload, "updated");
+    try {
+      return await updateSchemaMapping(ctx.schemaMappingIdOverride, payload, "updated");
+    } catch (err) {
+      ctx.notes.push({ type: "schema-mapping", severity: "warn",
+        message: `UpdateSchemaMapping(id=${ctx.schemaMappingIdOverride}) failed (${err.message}); creating a fresh mapping instead.` });
+      return createSchemaMappingFallback(payload);
+    }
   }
 
   const list = await edlioApiCall("GetIndexListSchemaMappingModel", {});
   const arr = Array.isArray(list) ? list : (list?.items || []);
-  const existing = arr.find(m =>
-    (m.name || "").toLowerCase().trim() === payload.name.toLowerCase().trim()
-  );
+  // Newest match first, so once Edlio's Update endpoint recovers we keep
+  // updating the freshest mapping rather than an older broken one.
+  const matches = arr
+    .filter(m => (m.name || "").toLowerCase().trim() === payload.name.toLowerCase().trim())
+    .sort((a, b) => (b.id || 0) - (a.id || 0));
+  const existing = matches[0];
 
   if (existing) {
-    return updateSchemaMapping(existing.id, payload, "updated");
+    try {
+      return await updateSchemaMapping(existing.id, payload, "updated");
+    } catch (err) {
+      ctx.notes.push({ type: "schema-mapping", severity: "warn",
+        message: `UpdateSchemaMapping(id=${existing.id}) failed (${err.message}); creating a fresh mapping instead. NOTE: Edlio's UpdateSchemaMapping API may be down server-side.` });
+      return createSchemaMappingFallback(payload);
+    }
   }
 
+  // No existing mapping → normal create with the real name.
   const created = await edlioApiCall("CreateSchemaMapping", { model: payload }, { write: true });
   const newId = created?.id || created?.model?.id;
   if (!newId) throw new Error(`CreateSchemaMapping returned no id: ${JSON.stringify(created).slice(0, 200)}`);
   return { id: newId, name: payload.name, action: "created" };
+}
+
+async function createSchemaMappingFallback(payload) {
+  // Edlio's UpdateSchemaMapping is the broken op; Create works. To avoid
+  // spawning a new mapping on every run while Update is down, use a
+  // deterministic fallback name and REUSE an existing fallback mapping if one
+  // is already present (we can't update it, but its content was written
+  // correctly at create time, so attaching its id is sufficient).
+  const fallbackName = `${payload.name} (auto)`;
+  const list = await edlioApiCall("GetIndexListSchemaMappingModel", {});
+  const arr = Array.isArray(list) ? list : (list?.items || []);
+  const existingFallback = arr
+    .filter(m => (m.name || "").toLowerCase().trim() === fallbackName.toLowerCase().trim())
+    .sort((a, b) => (b.id || 0) - (a.id || 0))[0];
+  if (existingFallback) {
+    ctx.notes.push({ type: "schema-mapping", severity: "warn",
+      message: `Reusing existing fallback mapping "${fallbackName}" (id ${existingFallback.id}) — UpdateSchemaMapping is unavailable, so its content was not refreshed this run.` });
+    return { id: existingFallback.id, name: fallbackName, action: "reused-fallback" };
+  }
+  const created = await edlioApiCall("CreateSchemaMapping", { model: { ...payload, name: fallbackName } }, { write: true });
+  const newId = created?.id || created?.model?.id;
+  if (!newId) throw new Error(`CreateSchemaMapping returned no id: ${JSON.stringify(created).slice(0, 200)}`);
+  return { id: newId, name: fallbackName, action: "created-fallback" };
 }
 
 async function updateSchemaMapping(id, payload, action) {
