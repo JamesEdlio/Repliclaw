@@ -64,7 +64,7 @@ function compactCsvs(csvs) {
   }));
 }
 
-function buildPrompt(csvs, schemaSpec, activeRoles, nonpersonRoles) {
+function buildPrompt(csvs, schemaSpec, activeRoles, nonpersonRoles, aliases) {
   return [
     {
       role: "system",
@@ -91,9 +91,17 @@ function buildPrompt(csvs, schemaSpec, activeRoles, nonpersonRoles) {
           person_roles: activeRoles,
           nonperson_roles: nonpersonRoles,
           note:
-            "A single CSV may serve multiple person roles (classify as 'multi'). " +
-            "classroom/enrollment are non-person. Use null role to ignore a file.",
+            "A single CSV may serve multiple person roles (classify the FILE as " +
+            "'multi'). When a file is 'multi', emit a SEPARATE mappings entry for " +
+            "EACH person role it serves (all pointing at the same csv_file), and " +
+            "map that role's full required field set. Different roles require " +
+            "different fields — e.g. teacher/administrator require " +
+            "employeeIdFieldName but student does not, so you must propose an " +
+            "employee-id column (or null with a reason) specifically for the " +
+            "teacher and administrator entries. classroom/enrollment are " +
+            "non-person. Use null role to ignore a file.",
         },
+        role_required_fields: aliases.role_required_fields || {},
         edlio_schema: schemaSpec,
         csv_files: compactCsvs(csvs),
         output_format: {
@@ -132,7 +140,7 @@ export async function modelMapAll(csvs, aliases, opts = {}) {
   const nonpersonRoles = opts.nonpersonRoles || [];
   const model = opts.model || DEFAULT_MODEL;
   const schemaSpec = buildSchemaSpec(aliases);
-  const messages = buildPrompt(csvs, schemaSpec, activeRoles, nonpersonRoles);
+  const messages = buildPrompt(csvs, schemaSpec, activeRoles, nonpersonRoles, aliases);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
