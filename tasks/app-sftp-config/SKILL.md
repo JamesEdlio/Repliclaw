@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.3.1
+version: 0.3.2
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -110,6 +110,17 @@ uploaded their first sync batch.
    people) are tagged `multi`. If any file is unclassified or
    ambiguous, return `needs_input` with `unclassified_files` and
    best-guess role.
+   - **Employee-family fan-out:** `staff`, `teacher`, and
+     `administrator` share one source schema (Employee ID + a Role
+     column). A roster often ships ONE employee/staff file serving all
+     three, but the classifier may label it as just `staff`. When a
+     file is single-classified as any employee role, it is also offered
+     (coverage-aware) to the other employee roles, so teacher/admin pull
+     `employeeIdFieldName` from the employee file instead of re-gating on
+     a person-multi file (e.g. users.csv) that has no Employee ID. The
+     file only wins a sibling role where it actually covers more required
+     fields. (Fixes the SS-273 Apply-loop where teacher/administrator
+     fell to users.csv and re-parked on employeeIdFieldName.)
 8. **Per-role column mapping.** For each active role, fuzzy-match
    CSV column headers against the canonical Edlio field aliases
    (`assets/aliases.json`). Confidence ≥ 0.85 = auto-accept,

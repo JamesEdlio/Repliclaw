@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.1";
+const SKILL_VERSION = "0.3.2";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -484,6 +484,18 @@ async function main() {
     // else keep incumbent (stable)
   };
 
+  // Employee-family roles all share the same source schema (they carry an
+  // Employee ID and are distinguished by a Role column). A roster commonly
+  // ships ONE staff/employee file that serves staff + teacher + administrator,
+  // but the model may classify that file as just "staff" (single role). If we
+  // honored that literally, teacher/administrator would fall through to a
+  // person-multi file (e.g. users.csv) that has NO Employee ID column and
+  // re-gate on employeeIdFieldName forever (SS-273). So: when a file is
+  // single-classified as one employee role, also OFFER it to the other
+  // employee roles via the coverage-aware assignRole — it only wins where it
+  // actually covers more required fields (i.e. it has the Employee ID).
+  const EMPLOYEE_FAMILY = ["staff", "teacher", "administrator"];
+
   for (const f of csvs) {
     if (!f.classified_role || f.classified_role === "multi") {
       const roles = f.classified_role === "multi" ? ACTIVE_ROLES : [];
@@ -493,11 +505,19 @@ async function main() {
     if (FORCE_DISABLED_ROLES.includes(f.classified_role)) continue;
     const role = f.classified_role;
     if (!ACTIVE_ROLES.includes(role) && !NONPERSON_ROLES.includes(role)) continue;
-    // A single-classified file is authoritative for its role; assign directly
+    // A single-classified file is authoritative for its own role; assign directly
     // (it should win over any multi-file guess for the same role).
     roleMappings[role] = mapOneRole(role, f);
     roleMappings[role].csv_file = roleMappings[role].csv_file || f.filename;
     presentRoles.add(role);
+    // Employee-family fan-out: offer this employee file to its sibling roles too,
+    // letting coverage win (staff.csv with Employee ID beats users.csv without).
+    if (EMPLOYEE_FAMILY.includes(role)) {
+      for (const sib of EMPLOYEE_FAMILY) {
+        if (sib === role || !ACTIVE_ROLES.includes(sib)) continue;
+        assignRole(sib, f);
+      }
+    }
   }
 
   // Auto-fill `fileName` for non-person roles (classroom/enrollment). This is a
