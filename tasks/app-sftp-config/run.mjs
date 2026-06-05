@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.4";
+const SKILL_VERSION = "0.3.5";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -498,19 +498,35 @@ async function main() {
   // from a stronger file (staff.csv, has Employee ID) and re-trigger the gate.
   // Prefer the candidate that satisfies more required fields for THIS role;
   // tie-break on more fields mapped overall, then keep the incumbent (stable).
-  const assignRole = (role, f) => {
+  const assignRole = (role, f, opts = {}) => {
     const cand = mapOneRole(role, f);
     cand.csv_file = cand.csv_file || f.filename;
+    if (opts.authoritative) cand._locked = true;
     const cur = roleMappings[role];
     presentRoles.add(role);
     if (!cur) { roleMappings[role] = cand; return; }
     const candMissing = (cand.missing_required || []).length;
     const curMissing = (cur.missing_required || []).length;
+    // A single-classified (authoritative) file is the preferred source for its
+    // own role — but never at the cost of REQUIRED coverage. If the authoritative
+    // file is missing required fields that a 'multi' file fully covers, take the
+    // complete one (students.csv lacks Unique ID on SS-273; users.csv has it).
+    if (cur._locked && !opts.authoritative) {
+      if (candMissing < curMissing) { roleMappings[role] = cand; cand._locked = true; return; }
+      return; // incumbent authoritative + not worse → keep it
+    }
+    if (opts.authoritative && !cur._locked) {
+      if (curMissing < candMissing) { return; } // existing multi mapping is more complete
+      roleMappings[role] = cand; return;
+    }
     if (candMissing < curMissing) { roleMappings[role] = cand; return; }
     if (candMissing > curMissing) return; // keep incumbent (better coverage)
-    const candMapped = Object.keys(cand.auto_mapped || {}).length;
-    const curMapped = Object.keys(cur.auto_mapped || {}).length;
-    if (candMapped > curMapped) roleMappings[role] = cand;
+    // Equal required-coverage: prefer the MODEL mapping over alias (alias spams
+    // duplicate column→field guesses like email2-5 all → "Email"), then keep
+    // incumbent (stable).
+    const candIsModel = cand.source === "model";
+    const curIsModel = cur.source === "model";
+    if (candIsModel && !curIsModel) { roleMappings[role] = cand; return; }
     // else keep incumbent (stable)
   };
 
@@ -565,11 +581,17 @@ async function main() {
     if (FORCE_DISABLED_ROLES.includes(f.classified_role)) continue;
     const role = f.classified_role;
     if (!ACTIVE_ROLES.includes(role) && !NONPERSON_ROLES.includes(role)) continue;
-    // A single-classified file is authoritative for its own role; assign directly
-    // (it should win over any multi-file guess for the same role).
-    roleMappings[role] = mapOneRole(role, f);
-    roleMappings[role].csv_file = roleMappings[role].csv_file || f.filename;
-    presentRoles.add(role);
+    // A single-classified file is authoritative for its own role: assign it as
+    // locked so a later 'multi' file (e.g. users.csv) can't clobber it with
+    // alias-matched junk. NONPERSON roles (classroom/enrollment) aren't part of
+    // the multi fan-out, so a direct assign is fine for them.
+    if (ACTIVE_ROLES.includes(role)) {
+      assignRole(role, f, { authoritative: true });
+    } else {
+      roleMappings[role] = mapOneRole(role, f);
+      roleMappings[role].csv_file = roleMappings[role].csv_file || f.filename;
+      presentRoles.add(role);
+    }
     // Employee-family fan-out: offer this employee file to its sibling roles too,
     // letting coverage win (staff.csv with Employee ID beats users.csv without).
     if (EMPLOYEE_FAMILY.includes(role)) {
@@ -1433,11 +1455,12 @@ function mapRoleColumns(role, file, override = null) {
   const auto_mapped = {};            // edlioField → csvColumn
   const low_confidence = [];         // [{ field, label, top_guesses: [{column, score}] }]
   const missing_required = [];
+  const claimedColumns = new Set();  // columns already auto-mapped in this role
 
   for (const [field, def] of Object.entries(fieldSet)) {
     if (override && Object.prototype.hasOwnProperty.call(override, field)) {
       const ov = override[field];
-      if (ov?.csv_column) auto_mapped[field] = ov.csv_column;
+      if (ov?.csv_column) { auto_mapped[field] = ov.csv_column; claimedColumns.add(ov.csv_column); }
       // If null → operator says "not present"; just leave unmapped.
       continue;
     }
@@ -1451,6 +1474,7 @@ function mapRoleColumns(role, file, override = null) {
 
     const label = def.label || field;
     const aliases = def.aliases || [];
+    const isRequired = required.includes(field);
     const candidates = [];
     for (const header of file.headers) {
       const score = scoreHeaderMatch(header, label, aliases);
@@ -1458,9 +1482,18 @@ function mapRoleColumns(role, file, override = null) {
     }
     candidates.sort((a, b) => b.score - a.score);
 
-    if (candidates.length && candidates[0].score >= ALIAS_AUTO_THRESHOLD) {
-      auto_mapped[field] = candidates[0].column;
-    } else if (candidates.length && candidates[0].score >= 0.5) {
+    // Don't let an OPTIONAL field re-claim a column already mapped to another
+    // field. The alias matcher otherwise maps email2/3/4/5FieldName and
+    // phone3/4/5FieldName all to the SAME "Email"/"Phone 1" column, producing
+    // 20+ duplicate mappings that make Edlio's CreateSchemaMapping 500 (SS-273).
+    // Required fields are allowed to share (rare, but identity fields take
+    // priority and are mapped first anyway).
+    const top = candidates.find(c => isRequired || !claimedColumns.has(c.column));
+
+    if (top && top.score >= ALIAS_AUTO_THRESHOLD) {
+      auto_mapped[field] = top.column;
+      claimedColumns.add(top.column);
+    } else if (top && top.score >= 0.5) {
       low_confidence.push({
         field, label,
         top_guesses: candidates.slice(0, 3).map(c => ({ column: c.column, score: Number(c.score.toFixed(2)) })),
@@ -1545,11 +1578,18 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
   const acceptedFileNames = csvs.map(c => c.filename);
   const hasMultipleFiles = acceptedFileNames.length > 1;
 
-  // organizationIdentifierInFiles: true if the CSVs carry org/school IDs
-  // per row (multi-org rollouts) — heuristic on column presence.
-  const organizationIdentifierInFiles = csvs.some(c =>
-    c.headers.some(h => /\b(school|org|building|site|campus)[_-]?(id|code|number)\b/i.test(h))
-  );
+  // organizationIdentifierInFiles: only true for genuine multi-org (district)
+  // rollouts. The authoritative signal is the FTP account's
+  // organizationIdMappings table — that's where source org-id values are
+  // paired to real Edlio organization IDs. Column presence alone is NOT
+  // sufficient: single schools routinely carry a constant schoolID/orgID
+  // column. If we flip this on for a single-org account (empty
+  // organizationIdMappings, district with no child orgs), Edlio's
+  // UpdateFtpAccount save crashes with a 500 (org reference cannot resolve).
+  const orgMappings = Array.isArray(ftpAccount.organizationIdMappings)
+    ? ftpAccount.organizationIdMappings
+    : [];
+  const organizationIdentifierInFiles = orgMappings.length > 0;
 
   const payload = {
     $className: "SchemaMappingEditModel",
@@ -1576,6 +1616,13 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
     }
     const block = { ...m.auto_mapped };
     if (!block.fileName) block.fileName = m.csv_file || null;
+    // Single-org account: Edlio must not attempt per-row org resolution.
+    // Drop any org-id field mapping so the importer treats every row as
+    // belonging to the one account org. Leaving it set while
+    // organizationIdentifierInFiles=false makes the save 500.
+    if (!organizationIdentifierInFiles) {
+      delete block.organizationIdFieldName;
+    }
     payload[settingsKey] = block;
   }
 
@@ -1583,7 +1630,9 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
   // nameField, sourceIdField, descriptionField?, disabledField?, ...}.
   const cmap = roleMappings.classroom;
   if (cmap && presentRoles.has("classroom")) {
-    payload.classroomSchemaModel = { ...cmap.auto_mapped };
+    const cblock = { ...cmap.auto_mapped };
+    if (!organizationIdentifierInFiles) delete cblock.organizationIdFieldName;
+    payload.classroomSchemaModel = cblock;
     payload.hasClassroomMapping = true;
   } else {
     payload.classroomSchemaModel = null;
@@ -1595,7 +1644,9 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
   // we surface a note).
   const emap = roleMappings.enrollment;
   if (emap && presentRoles.has("enrollment")) {
-    payload.enrollmentSchemaModels = [{ ...emap.auto_mapped }];
+    const eblock = { ...emap.auto_mapped };
+    if (!organizationIdentifierInFiles) delete eblock.organizationIdFieldName;
+    payload.enrollmentSchemaModels = [eblock];
   } else {
     payload.enrollmentSchemaModels = [];
   }

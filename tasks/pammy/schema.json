@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "ticket_key": { "type": "string" },
+    "mode": { "type": "string", "enum": ["triage", "recap", "plan"] },
+    "would_have_done": { "type": "string" }
+  },
+  "required": ["ticket_key", "mode", "would_have_done"],
+  "additionalProperties": true
+}
