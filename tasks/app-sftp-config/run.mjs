@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.5";
+const SKILL_VERSION = "0.3.6";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1059,6 +1059,32 @@ async function updateSchemaMapping(id, payload, action) {
   const edit = await edlioApiCall("GetEditSchemaMappingModel", { id });
   const base = edit?.model || edit;
   const merged = { ...base, ...payload, id };
+  // When the corrected payload is single-org (organizationIdentifierInFiles
+  // false), the merge can still leave stale per-row org references on settings
+  // blocks that base carried (e.g. a prior multi-org write left
+  // studentSettings.organizationIdFieldName="schoolID"). Edlio 500s on
+  // UpdateSchemaMapping if any block still names an org column while
+  // organizationIdentifierInFiles is false. Sweep the whole merged model.
+  if (merged.organizationIdentifierInFiles === false) {
+    for (const k of Object.keys(merged)) {
+      const v = merged[k];
+      if (k.endsWith("Settings") && v && typeof v === "object") {
+        delete v.organizationIdFieldName;
+      }
+    }
+    if (merged.classroomSchemaModel && typeof merged.classroomSchemaModel === "object") {
+      delete merged.classroomSchemaModel.organizationIdField;
+      delete merged.classroomSchemaModel.organizationIdFieldName;
+    }
+    if (Array.isArray(merged.enrollmentSchemaModels)) {
+      for (const e of merged.enrollmentSchemaModels) {
+        if (e && typeof e === "object") {
+          delete e.organizationIdField;
+          delete e.organizationIdFieldName;
+        }
+      }
+    }
+  }
   await edlioApiCall("UpdateSchemaMapping", { model: merged }, { write: true });
   return { id, name: payload.name, action };
 }
@@ -1575,7 +1601,20 @@ function jaroDistance(a, b) {
 // ==========================================================================
 
 function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, presentRoles }) {
-  const acceptedFileNames = csvs.map(c => c.filename);
+  // Only declare files we actually classified to a role. Unknown/junk files
+  // (e.g. a stray testingfirewall.csv) must NOT appear in acceptedFileNames —
+  // Edlio's UpdateSchemaMapping validator 500s on an accepted file that has
+  // no corresponding role/sub-model mapping.
+  const mappedFileNames = new Set();
+  for (const role of ACTIVE_ROLES) {
+    const m = roleMappings[role];
+    if (m && presentRoles.has(role)) mappedFileNames.add(m.csv_file);
+  }
+  if (roleMappings.classroom && presentRoles.has("classroom")) mappedFileNames.add(roleMappings.classroom.csv_file);
+  if (roleMappings.enrollment && presentRoles.has("enrollment")) mappedFileNames.add(roleMappings.enrollment.csv_file);
+  const acceptedFileNames = csvs
+    .map(c => c.filename)
+    .filter(name => mappedFileNames.has(name));
   const hasMultipleFiles = acceptedFileNames.length > 1;
 
   // organizationIdentifierInFiles: only true for genuine multi-org (district)
