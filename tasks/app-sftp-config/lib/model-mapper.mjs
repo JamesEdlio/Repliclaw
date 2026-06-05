@@ -101,6 +101,10 @@ function buildPrompt(csvs, schemaSpec, activeRoles, nonpersonRoles, aliases) {
             "teacher and administrator entries. classroom/enrollment are " +
             "non-person. Use null role to ignore a file.",
         },
+        important_note:
+          "NEVER emit a `fileName` field in your mappings — it is not a CSV " +
+          "column. The system fills it automatically with the source filename. " +
+          "Omit fileName entirely from every fields object.",
         role_required_fields: aliases.role_required_fields || {},
         edlio_schema: schemaSpec,
         csv_files: compactCsvs(csvs),
@@ -262,6 +266,12 @@ export function modelMappingToRoleMapping(role, modelEntry, aliases, sampleRowsB
   };
 
   for (const [field, info] of Object.entries(fields)) {
+    // `fileName` is a pseudo-field: it is the literal source CSV filename, NOT
+    // a column to map. The model often hallucinates it (emits "null" or a
+    // header), which then gets dropped as a non-header — and it would show up
+    // as an "unmapped" required field. Force it to csv_file and keep it out of
+    // the proposal table entirely.
+    if (field === "fileName") continue;
     const col = info?.csv_column || null;
     const conf = typeof info?.confidence === "number" ? info.confidence : 0;
     if (col) auto_mapped[field] = col;
@@ -279,7 +289,10 @@ export function modelMappingToRoleMapping(role, modelEntry, aliases, sampleRowsB
     }
   }
 
-  const missing_required = required.filter((f) => !auto_mapped[f]);
+  // Always set fileName to the literal source CSV — deterministic, never mapped.
+  if (csv_file) auto_mapped.fileName = csv_file;
+
+  const missing_required = required.filter((f) => f !== "fileName" && !auto_mapped[f]);
 
   return {
     csv_file,

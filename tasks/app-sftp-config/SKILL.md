@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.3.3
+version: 0.3.4
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -182,3 +182,13 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.3.4 — fileName pseudo-field + multi-promotion
+- `fileName` is never a model-mappable column. It is set deterministically to
+  the role's source CSV filename in the proposal AND the payload. The model is
+  told to omit it. (Fixes Edlio "File name is empty in <Role> settings." 400s.)
+- Multi-promotion guard: a person file single-classified as ONE role (model
+  non-determinism) is promoted to "multi" if it has a Role/UserType column or
+  both student-id + employee-id columns. Then only the person roles actually
+  present in the Role column values are mapped — so a students-only users.csv
+  doesn't force empty teacher/administrator mappings that re-gate.

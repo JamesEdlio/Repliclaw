@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.3";
+const SKILL_VERSION = "0.3.4";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -369,6 +369,36 @@ async function main() {
       f.confidence = 0.75;
     }
   }
+
+  // Deterministic multi-promotion guard.
+  //
+  // The model (and the alias matcher) sometimes pins an all-people roster file
+  // to ONE person role — e.g. classifying a users.csv as just "staff" when it
+  // actually carries Students, Teachers, Parents, etc. (SS-273: users.csv with
+  // Student ID / Grade / Relationship ID columns and a Role column whose values
+  // are "Student" got called "staff"). If we honor that literally, only the one
+  // role is mapped and the rest of the roster is silently dropped — and the
+  // mapping written to Edlio is simply wrong.
+  //
+  // So: if a file is single-classified as a PERSON role but its columns show it
+  // serves multiple person types, promote it to "multi" so every person role is
+  // mapped from it. Signals (any one):
+  //   - a Role/UserType column (mixed person types live in one file), OR
+  //   - BOTH a student-id-ish AND an employee-id-ish column present.
+  const PERSON_ROLES_SET = new Set(["student", "teacher", "staff", "parent", "guardian", "relative", "administrator"]);
+  for (const f of csvs) {
+    if (!PERSON_ROLES_SET.has(f.classified_role)) continue;
+    if (ctx.roleAssignments[f.filename] !== undefined) continue; // respect explicit operator choice
+    const hl = (f.headers || []).map(h => h.toLowerCase().replace(/[^a-z0-9]+/g, "_"));
+    const hasRoleCol = hl.some(h => h === "role" || h === "user_type" || h === "usertype" || h === "person_type" || h.includes("role_type"));
+    const hasStudentId = hl.some(h => h.includes("student") && h.includes("id"));
+    const hasEmployeeId = hl.some(h => h.includes("employee") && h.includes("id"));
+    if (hasRoleCol || (hasStudentId && hasEmployeeId)) {
+      f.classified_role = "multi";
+      f.classification_via = "multi_promoted";
+      f.confidence = Math.max(f.confidence || 0, 0.8);
+    }
+  }
   recordAction({
     type: "csv.classify",
     status: "success",
@@ -496,9 +526,39 @@ async function main() {
   // actually covers more required fields (i.e. it has the Employee ID).
   const EMPLOYEE_FAMILY = ["staff", "teacher", "administrator"];
 
+  // For a "multi" file, figure out which person roles actually appear in it by
+  // reading the Role/UserType column values. Forcing ALL seven person roles on
+  // a file that only contains Students would create teacher/administrator
+  // entries that miss employeeIdFieldName and re-gate forever. Map the value
+  // text to our canonical roles; if there's no role column (or nothing maps),
+  // fall back to all ACTIVE_ROLES (old behavior).
+  const detectMultiRoles = (f) => {
+    const headers = f.headers || [];
+    const roleHeader = headers.find(h => {
+      const n = h.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+      return n === "role" || n === "user_type" || n === "usertype" || n === "person_type";
+    });
+    if (!roleHeader) return ACTIVE_ROLES;
+    const seen = new Set();
+    for (const row of (f.sampleRows || [])) {
+      const raw = String(row?.[roleHeader] || "").toLowerCase().trim();
+      if (!raw) continue;
+      if (raw.includes("student")) seen.add("student");
+      else if (raw.includes("teacher") || raw.includes("faculty") || raw.includes("instructor")) seen.add("teacher");
+      else if (raw.includes("admin") || raw.includes("principal")) seen.add("administrator");
+      else if (raw.includes("parent")) seen.add("parent");
+      else if (raw.includes("guardian")) seen.add("guardian");
+      else if (raw.includes("relative")) seen.add("relative");
+      else if (raw.includes("staff") || raw.includes("employee")) seen.add("staff");
+    }
+    const roles = ACTIVE_ROLES.filter(r => seen.has(r));
+    return roles.length ? roles : ACTIVE_ROLES;
+  };
+
   for (const f of csvs) {
     if (!f.classified_role || f.classified_role === "multi") {
-      const roles = f.classified_role === "multi" ? ACTIVE_ROLES : [];
+      const roles = f.classified_role === "multi" ? detectMultiRoles(f) : [];
+      f.detected_multi_roles = roles;
       for (const role of roles) assignRole(role, f);
       continue;
     }
