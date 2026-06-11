@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.4.0";
+const SKILL_VERSION = "0.5.0";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1090,20 +1090,12 @@ async function upsertSchemaMapping(payload) {
   //   - If schema_mapping_id input was supplied → fetch + update
   //   - Else search by name → update if found
   //   - Else create
-  // Resilience: Edlio's UpdateSchemaMapping command has been observed 500ing
-  // across ALL mappings (server-side ApplicationException, even on a pure
-  // no-op update of an untouched mapping), while CreateSchemaMapping works.
-  // When Update fails, fall back to creating a fresh mapping and use its id —
-  // the FTP-account attach step links whichever id we return, so a broken or
-  // un-updatable existing mapping never blocks a rollout.
+  // NOTE: the edit command is EditSchemaMapping. It was previously mis-called
+  // as "UpdateSchemaMapping" (no such command → backend 500s with a generic
+  // ApplicationException). With the correct name a failure here is a real
+  // error and should surface, not silently fork to a duplicate "(auto)" map.
   if (ctx.schemaMappingIdOverride) {
-    try {
-      return await updateSchemaMapping(ctx.schemaMappingIdOverride, payload, "updated");
-    } catch (err) {
-      ctx.notes.push({ type: "schema-mapping", severity: "warn",
-        message: `UpdateSchemaMapping(id=${ctx.schemaMappingIdOverride}) failed (${err.message}); creating a fresh mapping instead.` });
-      return createSchemaMappingFallback(payload);
-    }
+    return await updateSchemaMapping(ctx.schemaMappingIdOverride, payload, "updated");
   }
 
   const list = await edlioApiCall("GetIndexListSchemaMappingModel", {});
@@ -1116,13 +1108,11 @@ async function upsertSchemaMapping(payload) {
   const existing = matches[0];
 
   if (existing) {
-    try {
-      return await updateSchemaMapping(existing.id, payload, "updated");
-    } catch (err) {
-      ctx.notes.push({ type: "schema-mapping", severity: "warn",
-        message: `UpdateSchemaMapping(id=${existing.id}) failed (${err.message}); creating a fresh mapping instead. NOTE: Edlio's UpdateSchemaMapping API may be down server-side.` });
-      return createSchemaMappingFallback(payload);
-    }
+    // EditSchemaMapping is the correct command (was previously mis-called as
+    // UpdateSchemaMapping, which 500s — the backend has no such command).
+    // A failure here is now a real error; surface it instead of silently
+    // forking to a duplicate "(auto)" mapping.
+    return await updateSchemaMapping(existing.id, payload, "updated");
   }
 
   // No existing mapping → normal create with the real name.
@@ -1130,29 +1120,6 @@ async function upsertSchemaMapping(payload) {
   const newId = created?.id || created?.model?.id;
   if (!newId) throw new Error(`CreateSchemaMapping returned no id: ${JSON.stringify(created).slice(0, 200)}`);
   return { id: newId, name: payload.name, action: "created" };
-}
-
-async function createSchemaMappingFallback(payload) {
-  // Edlio's UpdateSchemaMapping is the broken op; Create works. To avoid
-  // spawning a new mapping on every run while Update is down, use a
-  // deterministic fallback name and REUSE an existing fallback mapping if one
-  // is already present (we can't update it, but its content was written
-  // correctly at create time, so attaching its id is sufficient).
-  const fallbackName = `${payload.name} (auto)`;
-  const list = await edlioApiCall("GetIndexListSchemaMappingModel", {});
-  const arr = Array.isArray(list) ? list : (list?.items || []);
-  const existingFallback = arr
-    .filter(m => (m.name || "").toLowerCase().trim() === fallbackName.toLowerCase().trim())
-    .sort((a, b) => (b.id || 0) - (a.id || 0))[0];
-  if (existingFallback) {
-    ctx.notes.push({ type: "schema-mapping", severity: "warn",
-      message: `Reusing existing fallback mapping "${fallbackName}" (id ${existingFallback.id}) — UpdateSchemaMapping is unavailable, so its content was not refreshed this run.` });
-    return { id: existingFallback.id, name: fallbackName, action: "reused-fallback" };
-  }
-  const created = await edlioApiCall("CreateSchemaMapping", { model: { ...payload, name: fallbackName } }, { write: true });
-  const newId = created?.id || created?.model?.id;
-  if (!newId) throw new Error(`CreateSchemaMapping returned no id: ${JSON.stringify(created).slice(0, 200)}`);
-  return { id: newId, name: fallbackName, action: "created-fallback" };
 }
 
 async function updateSchemaMapping(id, payload, action) {
@@ -1164,7 +1131,7 @@ async function updateSchemaMapping(id, payload, action) {
   // When the corrected payload is single-org (organizationIdentifierInFiles
   // false), the merge can still leave stale per-row org references on settings
   // blocks that base carried (e.g. a prior multi-org write left
-  // studentSettings.organizationIdFieldName="schoolID"). Edlio 500s on
+  // studentSettings.organizationIdFieldName="schoolID"). Edlio 500s on Edit (was: Update — wrong name) if any
   // UpdateSchemaMapping if any block still names an org column while
   // organizationIdentifierInFiles is false. Sweep the whole merged model.
   if (merged.organizationIdentifierInFiles === false) {
@@ -1187,7 +1154,7 @@ async function updateSchemaMapping(id, payload, action) {
       }
     }
   }
-  await edlioApiCall("UpdateSchemaMapping", { model: merged }, { write: true });
+  await edlioApiCall("EditSchemaMapping", { model: merged }, { write: true });
   return { id, name: payload.name, action };
 }
 
@@ -1245,7 +1212,7 @@ async function applyFtpAccountConfig({ ftpAccount, schemaMappingId, presentRoles
   // Hard rule: never flip enabled on. If it was enabled, leave it. If not, leave it.
   // No mutation to base.enabled.
 
-  await edlioApiCall("UpdateFtpAccount", { model: base }, { write: true });
+  await edlioApiCall("EditFtpAccount", { model: base }, { write: true });
   return applied;
 }
 

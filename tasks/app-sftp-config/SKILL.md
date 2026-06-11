@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.4.0
+version: 0.5.0
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -183,6 +183,18 @@ See `schema.json`. Notable fields:
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
 
+### v0.5.0 — correct Edlio edit command names (THE real SS-273 blocker)
+- The write commands were mis-named: `UpdateSchemaMapping` / `UpdateFtpAccount`
+  do not exist on the backend, so it threw a generic 500 ApplicationException.
+  Per Edlio dev, the correct commands are **`EditSchemaMapping`** and
+  **`EditFtpAccount`** (the read index is `GetFtpAccountIndex`). Verified live:
+  `Edit*` → 200, `Update*` → 500. There was NO Edlio write/token outage; that
+  diagnosis was wrong (it came from probing the wrong `/connect/token`
+  artifact + calling nonexistent command names).
+- Removed the create-on-500 "(auto)" fallback that was built on the false
+  outage premise — it masked real errors and spawned duplicate mappings. A
+  failed edit now surfaces as a real error.
+
 ### v0.4.0 — golden mapping 146 (James-validated) payload shape
 Schema-mapping payload builder rebuilt to reproduce Saline mapping id 146,
 which James manually created in the Edlio dashboard and we read back via API
@@ -202,7 +214,7 @@ Validated offline field-for-field against the golden:
 - `adaptiveRelationship` true on exactly one role — the one whose source file
   carries the Relationship ID (preference: student, parent, guardian, ...).
 NOTE: golden 146 had a guardian `fileName` typo of "user"; the builder emits the
-correct "users". SS-273 apply still blocked by the Edlio write/token outage.
+correct "users".
 
 ### v0.3.4 — fileName pseudo-field + multi-promotion
 - `fileName` is never a model-mappable column. It is set deterministically to
