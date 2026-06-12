@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.6.0
+version: 0.7.0
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -182,6 +182,26 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.0 — build SchemaMapping payload from Edlio's blank create template
+- Root-causes the residual `CreateSchemaMapping` / `EditSchemaMapping` 500s:
+  hand-building the payload from scratch produced a structurally incomplete
+  envelope. Edlio's deserializer requires every field present — both the
+  top-level scalars (`withoutHeader`, `characterEncoding`, `availableParentTypes`,
+  `imageLinkOrFileGuid`, `selected`, all the unused `*Settings` blocks) and the
+  full ~46-key set inside each role-settings block (null when unmapped). A
+  sparse block 500s with a generic ApplicationException.
+- New approach: fetch `GetCreateSchemaMappingModel` (verified live → 200; returns
+  the exact blank shape) and overlay only the fields we control. Role-settings
+  blocks are built via `fullRoleSettings()` (skeleton of all keys, null-filled,
+  overlaid with mapped fields); `relationshipType` is populated as a sub-object
+  only on the single adaptive-relationship role.
+- Org fields are now **nulled** (not `delete`d) on single-org accounts so the
+  block keeps its full shape.
+- `buildSchemaMappingPayload` is now `async` (it fetches the template);
+  the caller awaits it.
+- Validated field-for-field against James's golden Saline mapping 146: the live
+  template supplies exactly the scalars/shape golden 146 carries.
 
 ### v0.6.0 — auto-provision Edlio FTP account when missing
 - Step 4 no longer errors when an SFTP user exists on FileMage but has no

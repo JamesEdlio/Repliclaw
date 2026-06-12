@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.6.0";
+const SKILL_VERSION = "0.7.0";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -61,6 +61,58 @@ const ALIAS_AUTO_THRESHOLD = 0.85;
 // Person roles we sync. Each gets a *Settings block on both the SchemaMapping
 // and the FTP account.
 const ACTIVE_ROLES = ["student", "teacher", "staff", "parent", "guardian", "relative", "administrator"];
+
+// Canonical full field set for a per-role *Settings block, as Edlio's
+// CreateSchemaMapping/EditSchemaMapping deserializer expects it. Every key MUST
+// be present (null when unmapped) — a sparse block (only the fields we mapped)
+// makes the backend 500 with a generic ApplicationException. Captured from the
+// James-validated golden mapping 146 (Saline). `relationshipType` defaults null;
+// it is only populated on the single adaptive-relationship role.
+const ROLE_SETTINGS_KEYS = [
+  "fileName", "roleFieldName", "roleName", "organizationIdFieldName",
+  "enabledFieldName", "disabledFieldName", "sourcedIdFieldName", "emailFieldName",
+  "email2FieldName", "email3FieldName", "email4FieldName", "email5FieldName",
+  "userNameFieldName", "passwordFieldName", "countryFieldName", "stateFieldName",
+  "zipFieldName", "cityFieldName", "addressFieldName", "employeeIdFieldName",
+  "studentIdFieldName", "alternateStudentIdFieldName", "hallPassPinFieldName",
+  "firstNameFieldName", "lastNameFieldName", "middleNameFieldName", "titleFieldName",
+  "imageUrlFieldName", "departmentFieldName", "prefixFieldName", "nicknameFieldName",
+  "homeLanguageFieldName", "busRouteAmFieldName", "busRoutePmFieldName",
+  "homeRoomFieldName", "gradeFieldName", "phoneFieldName", "cellPhoneFieldName",
+  "phone3FieldName", "phone4FieldName", "phone5FieldName", "relationshipIdsFieldName",
+  "relationshipType", "adaptiveRelationship", "classroomIdsFieldName",
+  "lastModifiedFieldName",
+];
+// relationshipType sub-object used on the adaptive (family-link) role. Golden
+// 146 set this on student (the role sourced from the file carrying the
+// Relationship ID column): parent-type relationship, parentType 0.
+const ADAPTIVE_RELATIONSHIP_TYPE = {
+  isStudent: false, staffType: null, parentType: 0, communityType: null,
+  isStaff: false, isParent: true, isCommunity: false,
+};
+// Build a full role-settings block: skeleton of all keys (null) overlaid with
+// the mapped fields. Guarantees the shape Edlio's deserializer requires.
+function fullRoleSettings(mapped) {
+  const block = {};
+  for (const k of ROLE_SETTINGS_KEYS) block[k] = null;
+  for (const [k, v] of Object.entries(mapped || {})) {
+    if (ROLE_SETTINGS_KEYS.includes(k)) block[k] = v;
+  }
+  return block;
+}
+// Canonical full key set for the classroom sub-model.
+const CLASSROOM_KEYS = [
+  "fileName", "organizationIdFieldName", "nameFieldName", "descriptionFieldName",
+  "sourceIdFieldName", "disabledFieldName", "iconIdFieldName", "iconExternalLinkFieldName",
+];
+function fullClassroomModel(mapped) {
+  const block = {};
+  for (const k of CLASSROOM_KEYS) block[k] = null;
+  for (const [k, v] of Object.entries(mapped || {})) {
+    if (CLASSROOM_KEYS.includes(k)) block[k] = v;
+  }
+  return block;
+}
 
 // Map a free-text Role / UserType / Relationship value (as it appears in a
 // roster file) to one of our canonical person roles. Rosters use wildly varied
@@ -824,7 +876,7 @@ async function main() {
 
 
   // -- Step 8: build SchemaMapping payload
-  const mappingPayload = buildSchemaMappingPayload({
+  const mappingPayload = await buildSchemaMappingPayload({
     ticket, ftpAccount, csvs, roleMappings, presentRoles,
   });
 
@@ -1801,7 +1853,7 @@ function jaroDistance(a, b) {
 // SchemaMapping payload construction
 // ==========================================================================
 
-function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, presentRoles }) {
+async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, presentRoles }) {
   // Count the distinct source files we actually mapped (drives hasMultipleFiles).
   // Golden 146 leaves acceptedFileNames EMPTY ([]) even with multiple files —
   // the per-role/sub-model fileName fields are what bind files to roles, and a
@@ -1831,14 +1883,22 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
     : [];
   const organizationIdentifierInFiles = orgMappings.length > 0;
 
-  const payload = {
-    $className: "SchemaMappingEditModel",
-    name: ticket.schoolName || ftpAccount.userName,
-    description: ticket.sisProvider || null,
-    hasMultipleFiles,
-    organizationIdentifierInFiles,
-    acceptedFileNames,
-  };
+  // Start from Edlio's own blank create template. This guarantees every
+  // top-level scalar Edlio expects (withoutHeader, characterEncoding,
+  // availableParentTypes, grade/lineItem sub-models, etc.) is present in the
+  // exact shape its deserializer wants. We only overlay the fields we control.
+  // Hand-building the envelope from scratch is what produced sparse/invalid
+  // payloads that 500 on CreateSchemaMapping.
+  const template = await edlioApiCall("GetCreateSchemaMappingModel");
+  const payload = template?.model || template || {};
+  payload.name = ticket.schoolName || ftpAccount.userName;
+  payload.description = ticket.sisProvider || null;
+  payload.hasMultipleFiles = hasMultipleFiles;
+  payload.organizationIdentifierInFiles = organizationIdentifierInFiles;
+  payload.acceptedFileNames = acceptedFileNames;
+  // New mapping: ensure id is 0/unset so Edlio treats it as a create.
+  if (!ctx.schemaMappingIdOverride) payload.id = 0;
+
 
   // Per-role *Settings blocks holding the field→column mappings.
   // Edlio's CreateSchemaMapping validator requires a non-empty `fileName`
@@ -1890,22 +1950,38 @@ function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMappings, pre
       payload[settingsKey] = null;
       continue;
     }
-    const block = { ...m.auto_mapped };
+    // Full 46-field block (skeleton overlaid with mapped fields) — Edlio 500s
+    // on a sparse block missing the unmapped null fields / relationshipType.
+    const block = fullRoleSettings(m.auto_mapped);
     // fileName: bare name, NO extension (golden 146).
-    block.fileName = stripExt(block.fileName || m.csv_file || "");
+    block.fileName = stripExt(m.auto_mapped.fileName || m.csv_file || "");
     // roleName filter string — how Edlio selects this role's rows out of a
     // shared family/staff file.
     if (!block.roleName) block.roleName = roleNameFor(role, m.csv_file);
-    // adaptiveRelationship: true only on the single relationship-bearing role.
-    block.adaptiveRelationship = (role === adaptiveRole);
+    // adaptiveRelationship: true only on the single relationship-bearing role,
+    // and that role also carries the populated relationshipType sub-object.
+    if (role === adaptiveRole) {
+      block.adaptiveRelationship = true;
+      block.relationshipType = { ...ADAPTIVE_RELATIONSHIP_TYPE };
+    } else {
+      block.adaptiveRelationship = false;
+      block.relationshipType = null;
+    }
     // Single-org account: Edlio must not attempt per-row org resolution.
-    // Drop any org-id field mapping so the importer treats every row as
+    // Null out any org-id field mapping so the importer treats every row as
     // belonging to the one account org. Leaving it set while
     // organizationIdentifierInFiles=false makes the save 500.
     if (!organizationIdentifierInFiles) {
-      delete block.organizationIdFieldName;
+      block.organizationIdFieldName = null;
     }
     payload[settingsKey] = block;
+  }
+  // Roles Edlio knows about but we never populate — keep them null so the
+  // shape is complete (the create template already nulls these, but be explicit
+  // in case a future template drops one).
+  for (const k of ["aideSettings", "otherParentSettings", "alumniSettings",
+                    "memberSettings", "volunteerSettings", "otherCommunitySettings"]) {
+    if (!(k in payload)) payload[k] = null;
   }
 
   // Classroom sub-model: single object with {fileName, organizationIdField,
