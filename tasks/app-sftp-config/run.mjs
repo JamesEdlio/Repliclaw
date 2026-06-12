@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.5.0";
+const SKILL_VERSION = "0.6.0";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -253,22 +253,64 @@ async function main() {
     );
   }
 
-  // -- Step 4: Edlio FTP account lookup
+  // -- Step 4: Edlio FTP account lookup (create if missing)
   const username = ctx.filemageUsernameOverride || deriveFileMageUsername(ticket.schoolName);
-  const ftpAccount = await edlioFindFtpAccount(username);
+  let ftpAccount = await edlioFindFtpAccount(username);
+  let ftpAccountCreated = false;
   if (!ftpAccount) {
-    recordError("edlio.ftp.notfound", new Error(
-      `no Edlio FTP account with userName=${username}; ` +
-      `run app-sftp first to provision the FTP account`
-    ));
-    return done({
-      status_reason: "needs_filemage",
-      ticket: ticketSummary(ticket),
-      ftp_account: null,
-    }, "error");
+    // No dashboard FTP account yet. SFTP files may already be landing on
+    // FileMage, but with no Edlio FTP account nothing gets ingested (this is
+    // the classic "I don't see anything in Edlio" symptom). Self-provision it
+    // here: resolve the district by name and create the account DISABLED.
+    // Edlio won't let us enable sync until an org + schema mapping exist; the
+    // schema-mapping step builds those and the operator enables on apply.
+    const resolved = await edlioResolveDistrictId(ticket.schoolName);
+    if (!resolved) {
+      recordError("edlio.ftp.nodistrict", new Error(
+        `no Edlio FTP account with userName=${username} and could not resolve ` +
+        `a district for schoolName=${JSON.stringify(ticket.schoolName)}. ` +
+        `Create the district/org in the dashboard first, or set a ` +
+        `filemage_username override, then re-run.`
+      ));
+      return done({
+        status_reason: "needs_district",
+        ticket: ticketSummary(ticket),
+        ftp_account: null,
+      }, "error");
+    }
+    try {
+      ftpAccount = await edlioCreateFtpAccount({
+        userName: username, districtId: resolved.districtId,
+      });
+      ftpAccountCreated = true;
+      recordAction({
+        type: "edlio.ftp.create",
+        status: "success",
+        ref: `edlio:ftp:${ftpAccount.id}`,
+        details: {
+          userName: username,
+          district_id: resolved.districtId,
+          district_name: resolved.districtName,
+          enabled: false,
+        },
+      });
+      recordNote(
+        `created Edlio FTP account ${username} (id=${ftpAccount.id}) for district ` +
+        `${resolved.districtName} (id=${resolved.districtId}); left DISABLED until ` +
+        `schema mapping is applied`,
+        "provision", "info"
+      );
+    } catch (err) {
+      recordError("edlio.ftp.createfailed", err);
+      return done({
+        status_reason: "ftp_create_failed",
+        ticket: ticketSummary(ticket),
+        ftp_account: null,
+      }, "error");
+    }
   }
   recordAction({
-    type: "edlio.ftp.read",
+    type: ftpAccountCreated ? "edlio.ftp.read-after-create" : "edlio.ftp.read",
     status: "success",
     ref: `edlio:ftp:${ftpAccount.id}`,
     details: {
@@ -277,6 +319,7 @@ async function main() {
       district_name: ftpAccount.districtName || null,
       schemaMappingId: ftpAccount.syncSchema?.id || null,
       enabled: ftpAccount.enabled,
+      created_this_run: ftpAccountCreated,
     },
   });
 
@@ -1082,6 +1125,53 @@ async function edlioFindFtpAccount(userName) {
   // Fetch the full edit model.
   const edit = await edlioApiCall("GetEditFtpAccountModel", { id: hit.id });
   // edit responses sometimes wrap under {model: ...}, sometimes return raw.
+  return edit?.model || edit;
+}
+
+// Resolve a districtId from a school/district name. Tries the districts list
+// first (exact, then loose contains), then falls back to the organizations
+// list (orgs carry districtId). Returns { districtId, districtName } or null.
+async function edlioResolveDistrictId(schoolName) {
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const target = norm(schoolName);
+  if (!target) return null;
+
+  const dl = await edlioApiCall("GetAllDistricts");
+  const dists = Array.isArray(dl) ? dl : (dl?.items || []);
+  // exact normalized match, then "district name contains the school name or
+  // vice-versa" (handles "Woodbine" ↔ "Woodbine School District").
+  let d = dists.find(x => norm(x.name) === target)
+       || dists.find(x => norm(x.name).includes(target) || target.includes(norm(x.name)));
+  if (d) return { districtId: d.id, districtName: d.name };
+
+  // Fall back to organizations (they carry districtId).
+  const ol = await edlioApiCall("GetAllOrganizations", { includeDisabled: true, includeCanceled: true });
+  const orgs = Array.isArray(ol) ? ol : (ol?.items || ol?.organizations || []);
+  const o = orgs.find(x => norm(x.name) === target)
+         || orgs.find(x => norm(x.name).includes(target) || target.includes(norm(x.name)));
+  if (o && o.districtId) {
+    const dm = dists.find(x => x.id === o.districtId);
+    return { districtId: o.districtId, districtName: dm?.name || o.name };
+  }
+  return null;
+}
+
+// Create a dashboard FTP account for an SFTP user that exists on FileMage but
+// has no Edlio FTP account yet. Created DISABLED on purpose: Edlio refuses to
+// enable sync until an org mapping + schema mapping exist (those are built by
+// the schema-mapping step later in this run / on apply). Returns the full
+// edit model of the created account, or throws with the validation errors.
+async function edlioCreateFtpAccount({ userName, districtId }) {
+  const model = await edlioApiCall("GetCreateFtpAccountModel");
+  const base = model?.model || model;
+  base.userName = userName;
+  base.districtId = districtId;
+  base.enabled = false;
+  const created = await edlioApiCall("CreateFtpAccount", { model: base }, { write: true });
+  const newId = created?.id || created?.model?.id;
+  if (!newId) throw new Error(`CreateFtpAccount returned no id: ${JSON.stringify(created).slice(0, 200)}`);
+  // Re-fetch the full edit model so downstream steps get per-role settings etc.
+  const edit = await edlioApiCall("GetEditFtpAccountModel", { id: newId });
   return edit?.model || edit;
 }
 

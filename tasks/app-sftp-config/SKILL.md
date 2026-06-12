@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.5.0
+version: 0.6.0
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -182,6 +182,20 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.6.0 — auto-provision Edlio FTP account when missing
+- Step 4 no longer errors when an SFTP user exists on FileMage but has no
+  Edlio dashboard FTP account (the classic "files arrive but nothing shows up
+  in the app / Mass Comms" symptom). It now self-provisions: resolve the
+  district by school name (`GetAllDistricts`, falling back to
+  `GetAllOrganizations`), then `CreateFtpAccount` **disabled** (Edlio refuses
+  to enable sync until an org mapping + schema mapping exist; those get built
+  by the schema-mapping step and enabled on apply).
+- New helpers: `edlioResolveDistrictId(schoolName)`,
+  `edlioCreateFtpAccount({userName, districtId})`. Creation is surfaced in the
+  result envelope (`edlio.ftp.create` action + `created_this_run: true`).
+- If the district can't be resolved, returns `needs_district` (create the
+  district/org in the dashboard first, or pass a `filemage_username` override).
 
 ### v0.5.0 — correct Edlio edit command names (THE real SS-273 blocker)
 - The write commands were mis-named: `UpdateSchemaMapping` / `UpdateFtpAccount`
