@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.0";
+const SKILL_VERSION = "0.7.1";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1984,23 +1984,24 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
     if (!(k in payload)) payload[k] = null;
   }
 
-  // Classroom sub-model: single object with {fileName, organizationIdField,
-  // nameField, sourceIdField, descriptionField?, disabledField?, ...}.
+  // Classroom sub-model: built from the full canonical key skeleton (golden
+  // 146 carries all 8 keys, with nulls for unmapped). A SPARSE block here was
+  // a confirmed 500 trigger on CreateSchemaMapping — Edlio's deserializer
+  // expects the complete shape, same as the role-settings blocks.
   const cmap = roleMappings.classroom;
   if (cmap && presentRoles.has("classroom")) {
-    const cblock = { ...cmap.auto_mapped };
+    const cblock = fullClassroomModel(cmap.auto_mapped);
     cblock.fileName = stripExt(cblock.fileName || cmap.csv_file || "");
-    if (!organizationIdentifierInFiles) delete cblock.organizationIdFieldName;
+    if (!organizationIdentifierInFiles) cblock.organizationIdFieldName = null;
     payload.classroomSchemaModel = cblock;
-    payload.hasClassroomMapping = true;
   } else {
     payload.classroomSchemaModel = null;
-    payload.hasClassroomMapping = false;
   }
 
   // Enrollment sub-model: array, one per enrollments file (we only support
   // a single enrollments file in v0.1; if multiple, last wins for now and
-  // we surface a note).
+  // we surface a note). Golden 146's enrollment block has exactly
+  // {fileName, personSourceIdField, classroomSourceIdField} — no extra keys.
   const emap = roleMappings.enrollment;
   if (emap && presentRoles.has("enrollment")) {
     const eblock = { ...emap.auto_mapped };
@@ -2011,9 +2012,14 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
     payload.enrollmentSchemaModels = [];
   }
 
-  // Flags for grade/lineItem stay false in v0.1.
-  payload.hasGradesMapping = false;
-  payload.hasLineItemMapping = false;
+  // NOTE: do NOT inject hasClassroomMapping / hasGradesMapping /
+  // hasLineItemMapping. Golden 146 carries NONE of these top-level booleans —
+  // only hasMultipleFiles (set earlier). The live create-template we overlay
+  // already provides whatever grade/lineItem defaults Edlio wants. Adding
+  // phantom keys was a confirmed 500 trigger (v0.7.0 Woodbine).
+  delete payload.hasClassroomMapping;
+  delete payload.hasGradesMapping;
+  delete payload.hasLineItemMapping;
 
   return payload;
 }

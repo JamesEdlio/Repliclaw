@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.0
+version: 0.7.1
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -182,6 +182,26 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.1 — drop phantom top-level booleans + full classroom block (500 fix)
+- v0.7.0 still 500'd CreateSchemaMapping on Woodbine (SS-460). Captured the
+  exact failing payload via dry-run and diffed it field-for-field against the
+  golden-146 fixture. Two residual structural defects, both the same class of
+  bug v0.7.0 fixed for role blocks but missed for the classroom/top-level:
+    1. Injected three phantom top-level booleans — `hasClassroomMapping`,
+       `hasGradesMapping`, `hasLineItemMapping` — that golden 146 does NOT
+       carry (golden has only `hasMultipleFiles`). Now stripped; the live
+       create-template supplies whatever grade/lineItem defaults Edlio wants.
+    2. `classroomSchemaModel` was emitted SPARSE (4 keys) where golden carries
+       the full 8-key block (with nulls for unmapped). Now built via
+       `fullClassroomModel()` skeleton + overlay, same pattern as role blocks.
+- After fix: dry-run payload top-level key set is IDENTICAL to golden 146, and
+  every populated *Settings + classroom + enrollment block matches golden's key
+  shape exactly. Remaining set/null differences are data-only (Woodbine roster
+  has administrator/relative roles; Saline had staff/guardian).
+- Lesson: when overlaying on a fetched template, never re-add keys the template
+  doesn't define — diff the built payload against a known-good golden before
+  shipping.
 
 ### v0.7.0 — build SchemaMapping payload from Edlio's blank create template
 - Root-causes the residual `CreateSchemaMapping` / `EditSchemaMapping` 500s:
