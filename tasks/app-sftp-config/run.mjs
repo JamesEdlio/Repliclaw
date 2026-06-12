@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.1";
+const SKILL_VERSION = "0.7.2";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1943,23 +1943,37 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
     }
   }
 
+  // Edlio's CreateSchemaMapping supports exactly FIVE person role-settings
+  // slots: student, teacher, staff, parent, guardian. (Verified by sampling 19
+  // real accepted multi-file mappings — administratorSettings / relativeSettings
+  // are NEVER populated and cause a backend NullReferenceException 500 on
+  // create.) Our internal classification is richer (administrator, relative)
+  // so collapse those onto the supported slots before emitting:
+  //   administrator -> staff   (admins are employees → staff sync slot)
+  //   relative      -> guardian (extended family → guardian slot)
+  const EDLIO_ROLE_SLOT = {
+    student: "student", teacher: "teacher", staff: "staff",
+    parent: "parent", guardian: "guardian",
+    administrator: "staff", relative: "guardian",
+  };
+  // Count how many of a block's keys are non-null mapped fields (for picking
+  // the better block when two internal roles collapse to the same slot).
+  const mappedCount = (blk) => Object.values(blk).filter(v => v !== null && v !== false).length;
+
+  // First pass: build a candidate block per *internal* role, then merge into
+  // the collapsed Edlio slot keeping the richer mapping.
+  const slotBlocks = {}; // slot -> { block, roleNames:Set }
   for (const role of ACTIVE_ROLES) {
-    const settingsKey = `${role}Settings`;
     const m = roleMappings[role];
-    if (!m || !presentRoles.has(role)) {
-      payload[settingsKey] = null;
-      continue;
-    }
+    if (!m || !presentRoles.has(role)) continue;
+    const slot = EDLIO_ROLE_SLOT[role];
+    if (!slot) continue; // unsupported, skip entirely
     // Full 46-field block (skeleton overlaid with mapped fields) — Edlio 500s
     // on a sparse block missing the unmapped null fields / relationshipType.
     const block = fullRoleSettings(m.auto_mapped);
-    // fileName: bare name, NO extension (golden 146).
     block.fileName = stripExt(m.auto_mapped.fileName || m.csv_file || "");
-    // roleName filter string — how Edlio selects this role's rows out of a
-    // shared family/staff file.
     if (!block.roleName) block.roleName = roleNameFor(role, m.csv_file);
-    // adaptiveRelationship: true only on the single relationship-bearing role,
-    // and that role also carries the populated relationshipType sub-object.
+    // adaptiveRelationship: true only on the single relationship-bearing role.
     if (role === adaptiveRole) {
       block.adaptiveRelationship = true;
       block.relationshipType = { ...ADAPTIVE_RELATIONSHIP_TYPE };
@@ -1967,14 +1981,40 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
       block.adaptiveRelationship = false;
       block.relationshipType = null;
     }
-    // Single-org account: Edlio must not attempt per-row org resolution.
-    // Null out any org-id field mapping so the importer treats every row as
-    // belonging to the one account org. Leaving it set while
-    // organizationIdentifierInFiles=false makes the save 500.
-    if (!organizationIdentifierInFiles) {
-      block.organizationIdFieldName = null;
+    if (!organizationIdentifierInFiles) block.organizationIdFieldName = null;
+
+    const existing = slotBlocks[slot];
+    if (!existing) {
+      slotBlocks[slot] = { block, roleNames: new Set([block.roleName].filter(Boolean)) };
+    } else {
+      // Two internal roles collapse to one slot (e.g. staff + administrator).
+      // Keep the block with the richer field coverage; union the roleName
+      // filter strings so Edlio selects rows for BOTH original role values.
+      if (block.roleName) existing.roleNames.add(block.roleName);
+      // Preserve the adaptive-relationship marker across the merge no matter
+      // which block wins on coverage (the family-link role must keep it).
+      const adaptiveWins = block.adaptiveRelationship && !existing.block.adaptiveRelationship;
+      if (mappedCount(block) > mappedCount(existing.block)) {
+        if (existing.block.adaptiveRelationship && !block.adaptiveRelationship) {
+          block.adaptiveRelationship = true;
+          block.relationshipType = { ...ADAPTIVE_RELATIONSHIP_TYPE };
+        }
+        slotBlocks[slot] = { block, roleNames: existing.roleNames };
+      } else if (adaptiveWins) {
+        existing.block.adaptiveRelationship = true;
+        existing.block.relationshipType = { ...ADAPTIVE_RELATIONSHIP_TYPE };
+      }
     }
-    payload[settingsKey] = block;
+  }
+  // Emit exactly the five supported slots; null for any not present.
+  for (const slot of ["student", "teacher", "staff", "parent", "guardian"]) {
+    const sb = slotBlocks[slot];
+    if (!sb) { payload[`${slot}Settings`] = null; continue; }
+    // Merged roleName filter (distinct, comma-joined) so a single staff file
+    // carrying both "Staff" and "Administrator" rows selects both.
+    const names = Array.from(sb.roleNames).filter(Boolean);
+    if (names.length) sb.block.roleName = names.join(", ");
+    payload[`${slot}Settings`] = sb.block;
   }
   // Roles Edlio knows about but we never populate — keep them null so the
   // shape is complete (the create template already nulls these, but be explicit

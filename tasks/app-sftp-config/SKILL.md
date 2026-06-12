@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.1
+version: 0.7.2
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -182,6 +182,25 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.2 — collapse unsupported role slots onto the 5 Edlio supports
+- Edlio's CreateSchemaMapping supports exactly five person role-settings slots:
+  student, teacher, staff, parent, guardian. (Verified by sampling 19 real
+  accepted multi-file mappings — `administratorSettings` and `relativeSettings`
+  are never populated.) Our internal classification is richer (administrator,
+  relative), so the payload builder now collapses:
+    administrator -> staff,  relative -> guardian
+  When two internal roles land in the same slot, keep the richer block and
+  union the `roleName` filter strings (e.g. "Staff, Administrator") so a single
+  shared file still selects rows for both. adaptiveRelationship marker is
+  preserved across the merge.
+- NOTE: banked but NOT live-verified. As of 2026-06-12 ~20:09 UTC the Edlio
+  write tier (CreateSchemaMapping / EditSchemaMapping / EditFtpAccount) is
+  500ing with NullReferenceException on ALL known-good payloads — including a
+  no-op round-trip of golden-146 and a no-op EditFtpAccount. Reads are 200.
+  This is a platform-side regression (these writes worked earlier the same
+  day). SS-460 is blocked on Edlio, not on this skill. Re-verify v0.7.2 once
+  Edlio restores the command tier.
 
 ### v0.7.1 — drop phantom top-level booleans + full classroom block (500 fix)
 - v0.7.0 still 500'd CreateSchemaMapping on Woodbine (SS-460). Captured the
