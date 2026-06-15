@@ -10,6 +10,7 @@
 //   3. Dup-send guard (scan comments for [app-sftp] setup-sent marker)
 //   4. Collect POC emails
 //   5. FileMage user provision (or reuse)
+//   5b. Edlio dashboard FTP account provision (create if missing, DISABLED)
 //   6. 1Password item create + 7-day share
 //   7. Gmail send via edith@edlio.com
 //   8. POST Forge comment with marker
@@ -18,7 +19,7 @@
 // Everything is idempotent on re-run: dup-send guard short-circuits step 2
 // if a prior successful run is detected.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +28,7 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.2.2";
+const SKILL_VERSION = "0.3.0";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
 const ONEPASSWORD_VAULT = "Agent: DI-Ana - SFTP";
@@ -40,6 +41,11 @@ const MARKER_EVENT = "setup-sent";
 // and block the bridge queue.
 const FETCH_TIMEOUT_MS = 30_000;  // reads
 const FETCH_WRITE_TIMEOUT_MS = 60_000;  // writes (FileMage user create, etc.)
+
+// Edlio dashboard API. Used to self-provision the app-dashboard FTP account at
+// intake (Step 5b). Constants hoisted here so the helpers below can reach them.
+const EDLIO_API = "https://edlio-connect.schoolinfo.app";
+const EDLIO_CLIENT_ID = "schoolinfoapp_dashboard";
 
 /**
  * fetch with a hard AbortController timeout. Throws a readable error on
@@ -239,6 +245,108 @@ async function main() {
     }
   }
 
+  // Step 5b: Edlio app-dashboard FTP account (create if missing).
+  // FileMage holds the SFTP user, but nothing ingests into Edlio until a
+  // dashboard FTP account exists for that username. Create it here at intake
+  // so the account is present from day one. Created DISABLED on purpose —
+  // Edlio won't let sync enable until an org + schema mapping exist (those are
+  // built later by the app-sftp-config skill, and the operator enables on
+  // apply). Resolve the district by the ticket's school name.
+  const dashFtp = {
+    account_id: null,
+    district_id: null,
+    district_name: null,
+    enabled: false,
+    created_now: false,
+    existing: false,
+  };
+  try {
+    const existingDash = await edlioFindFtpAccount(username);
+    if (existingDash) {
+      dashFtp.account_id = existingDash.id;
+      dashFtp.district_id = existingDash.districtId ?? null;
+      dashFtp.enabled = !!existingDash.enabled;
+      dashFtp.existing = true;
+      recordAction({
+        type: "edlio.ftp.read",
+        status: "success",
+        ref: `edlio:ftp:${existingDash.id}`,
+        details: { userName: username, existing: true, enabled: dashFtp.enabled },
+      });
+    } else if (dryRun) {
+      const resolved = await edlioResolveDistrictId(schoolName);
+      dashFtp.district_id = resolved?.districtId ?? null;
+      dashFtp.district_name = resolved?.districtName ?? null;
+      recordAction({
+        type: "edlio.ftp.create",
+        status: "skipped",
+        details: {
+          dry_run: true, userName: username,
+          district_id: dashFtp.district_id, district_name: dashFtp.district_name,
+        },
+      });
+      if (!resolved) {
+        recordNote(
+          `dry-run: could not resolve an Edlio district for schoolName=` +
+          `${JSON.stringify(schoolName)}; live run would skip dashboard FTP create`,
+          "provision", "warning");
+      }
+    } else {
+      const resolved = await edlioResolveDistrictId(schoolName);
+      if (!resolved) {
+        // Non-fatal: intake (FileMage + outreach) is the primary job. Record a
+        // warning so the operator can create the district/org and let the
+        // later app-sftp-config run self-provision the account.
+        recordAction({
+          type: "edlio.ftp.create",
+          status: "skipped",
+          details: { userName: username, reason: "district_unresolved", school: schoolName },
+        });
+        recordNote(
+          `could not resolve an Edlio district for schoolName=${JSON.stringify(schoolName)}; ` +
+          `dashboard FTP account NOT created. Create the district/org in the ` +
+          `dashboard, then re-run or let app-sftp-config provision it on apply.`,
+          "provision", "warning");
+      } else {
+        const acct = await edlioCreateFtpAccount({
+          userName: username, districtId: resolved.districtId,
+        });
+        dashFtp.account_id = acct.id;
+        dashFtp.district_id = resolved.districtId;
+        dashFtp.district_name = resolved.districtName;
+        dashFtp.created_now = true;
+        recordAction({
+          type: "edlio.ftp.create",
+          status: "success",
+          ref: `edlio:ftp:${acct.id}`,
+          details: {
+            userName: username,
+            district_id: resolved.districtId,
+            district_name: resolved.districtName,
+            enabled: false,
+          },
+        });
+        recordNote(
+          `created Edlio dashboard FTP account ${username} (id=${acct.id}) for ` +
+          `district ${resolved.districtName} (id=${resolved.districtId}); left ` +
+          `DISABLED until a schema mapping is applied (app-sftp-config).`,
+          "provision", "info");
+      }
+    }
+  } catch (err) {
+    // Never fail the intake run over the dashboard step — FileMage + outreach
+    // already succeeded. Surface it as a recorded error/note for the operator.
+    recordAction({
+      type: "edlio.ftp.create",
+      status: "error",
+      details: { userName: username, error: err.message },
+    });
+    recordNote(
+      `dashboard FTP account step failed (non-fatal): ${err.message}. FileMage ` +
+      `user + outreach completed; app-sftp-config will self-provision on apply.`,
+      "provision", "warning");
+  }
+
   // Step 6: 1Password item create + share
   const itemTitle = `${ticket.key} - ${schoolName}`;
   const password = generatePassword();
@@ -409,6 +517,14 @@ async function main() {
       endpoint_name: fmEndpointName,
       provisioned_now: fmProvisionedNow,
     },
+    dashboard_ftp_account: {
+      account_id: dashFtp.account_id,
+      district_id: dashFtp.district_id,
+      district_name: dashFtp.district_name,
+      enabled: dashFtp.enabled,
+      created_now: dashFtp.created_now,
+      existing: dashFtp.existing,
+    },
     outreach: {
       email_to: to,
       email_cc: cc,
@@ -424,6 +540,199 @@ async function main() {
       status_transition: transitioned,
     },
   });
+}
+
+// ==========================================================================
+// Edlio dashboard API
+// (constants EDLIO_API, EDLIO_CLIENT_ID are hoisted to top of file)
+// ==========================================================================
+
+function edlioCachePath() {
+  return process.env.EDLIO_TOKEN_CACHE_PATH ||
+    `${process.env.HOME || "/tmp"}/.edlio_token_cache.json`;
+}
+
+function edlioReadCache() {
+  try { return JSON.parse(readFileSync(edlioCachePath(), "utf-8")); }
+  catch { return null; }
+}
+
+function edlioWriteCache(data) {
+  try {
+    const path = edlioCachePath();
+    writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
+    chmodSync(path, 0o600);
+  } catch (err) {
+    process.stderr.write(`[edlio] cache write failed: ${err.message}\n`);
+  }
+}
+
+async function edlioFormPost(params) {
+  const body = new URLSearchParams(params).toString();
+  const res = await fetchT(`${EDLIO_API}/api/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  }, FETCH_WRITE_TIMEOUT_MS);
+  const text = await res.text();
+  if (!res.ok) throw new Error(`edlio /api/token -> ${res.status}: ${text.slice(0, 300)}`);
+  try { return JSON.parse(text); }
+  catch { throw new Error(`edlio /api/token -> bad JSON: ${text.slice(0, 200)}`); }
+}
+
+async function edlioFullLogin() {
+  const username = process.env.EDLIOAPP_USER;
+  const opItemId = process.env.EDLIOAPP_OP_ITEM_ID;
+  const opVault = process.env.EDLIOAPP_OP_VAULT || "Agent: Edith";
+  if (!username) throw new Error("EDLIOAPP_USER not in env");
+  if (!opItemId) throw new Error("EDLIOAPP_OP_ITEM_ID not in env");
+
+  const pwResult = spawnSync("op",
+    ["item", "get", opItemId, "--vault", opVault, "--fields=password", "--reveal"],
+    { env: opEnv(), encoding: "utf-8" });
+  if (pwResult.status !== 0) throw new Error(`op fetch password failed: ${pwResult.stderr || pwResult.stdout}`);
+  const password = pwResult.stdout.trim();
+  if (!password) throw new Error("edlio password from 1Password was empty");
+
+  const otpResult = spawnSync("op",
+    ["item", "get", opItemId, "--vault", opVault, "--otp"],
+    { env: opEnv(), encoding: "utf-8" });
+  if (otpResult.status !== 0) throw new Error(`op fetch otp failed: ${otpResult.stderr || otpResult.stdout}`);
+  const totp = otpResult.stdout.trim();
+  if (!/^\d{6}$/.test(totp)) throw new Error(`edlio TOTP malformed`);
+
+  const r1 = await edlioFormPost({
+    grant_type: "password", username, password, client_id: EDLIO_CLIENT_ID,
+  });
+  if (!r1.totpToken) {
+    if (r1.access_token) {
+      return { accessToken: r1.access_token, refreshToken: r1.refresh_token || null, expiresIn: r1.expires_in || 1800 };
+    }
+    throw new Error(`edlio password grant returned no totpToken: ${Object.keys(r1).join(",")}`);
+  }
+  const r2 = await edlioFormPost({
+    grant_type: "totp_token", totp_token: r1.totpToken, totp_password: totp, client_id: EDLIO_CLIENT_ID,
+  });
+  if (!r2.access_token) throw new Error(`edlio totp grant returned no access_token`);
+  return {
+    accessToken: r2.access_token,
+    refreshToken: r2.refresh_token,
+    expiresIn: r2.expires_in || 1800,
+  };
+}
+
+async function edlioRefreshLogin(refreshToken) {
+  const r = await edlioFormPost({
+    grant_type: "refresh_token", refresh_token: refreshToken, client_id: EDLIO_CLIENT_ID,
+  });
+  if (!r.access_token) throw new Error(`edlio refresh returned no access_token`);
+  return {
+    accessToken: r.access_token,
+    refreshToken: r.refresh_token || refreshToken,
+    expiresIn: r.expires_in || 1800,
+  };
+}
+
+async function edlioGetAccessToken() {
+  const cache = edlioReadCache();
+  const now = Date.now();
+  if (cache?.accessToken && cache.expiresAt && cache.expiresAt - now > 120_000) {
+    return cache.accessToken;
+  }
+  if (cache?.refreshToken) {
+    try {
+      const r = await edlioRefreshLogin(cache.refreshToken);
+      const expiresAt = Date.now() + r.expiresIn * 1000;
+      edlioWriteCache({ accessToken: r.accessToken, refreshToken: r.refreshToken, expiresAt });
+      return r.accessToken;
+    } catch (err) {
+      process.stderr.write(`[edlio] refresh failed, full login: ${err.message}\n`);
+    }
+  }
+  const r = await edlioFullLogin();
+  const expiresAt = Date.now() + r.expiresIn * 1000;
+  edlioWriteCache({ accessToken: r.accessToken, refreshToken: r.refreshToken, expiresAt });
+  return r.accessToken;
+}
+
+async function edlioApiCall(className, payload = {}, { write = false } = {}) {
+  const token = await edlioGetAccessToken();
+  const verb = write ? "command" : "query";
+  const res = await fetchT(`${EDLIO_API}/api/channel/${verb}/${className}`, {
+    method: "POST",
+    headers: { "authorization": `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ $className: className, ...payload }),
+  }, write ? FETCH_WRITE_TIMEOUT_MS : FETCH_TIMEOUT_MS);
+  const text = await res.text();
+  if (!res.ok) {
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    const msg = parsed?.result?.errors?.length ? parsed.result.errors.join("; ")
+      : (parsed?.message || text.slice(0, 400));
+    throw new Error(`edlio ${verb}/${className} -> ${res.status}: ${msg}`);
+  }
+  if (!text) return null;
+  try { return JSON.parse(text); }
+  catch { return text; }
+}
+
+async function edlioFindFtpAccount(userName) {
+  const list = await edlioApiCall("GetFtpAccountIndex");
+  const arr = Array.isArray(list) ? list : (list?.items || []);
+  const hit = arr.find(a => a.userName === userName);
+  if (!hit) return null;
+  // Index entries don't carry per-role settings or syncSchema.id reliably.
+  // Fetch the full edit model.
+  const edit = await edlioApiCall("GetEditFtpAccountModel", { id: hit.id });
+  // edit responses sometimes wrap under {model: ...}, sometimes return raw.
+  return edit?.model || edit;
+}
+
+// Resolve a districtId from a school/district name. Tries the districts list
+// first (exact, then loose contains), then falls back to the organizations
+// list (orgs carry districtId). Returns { districtId, districtName } or null.
+async function edlioResolveDistrictId(schoolName) {
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const target = norm(schoolName);
+  if (!target) return null;
+
+  const dl = await edlioApiCall("GetAllDistricts");
+  const dists = Array.isArray(dl) ? dl : (dl?.items || []);
+  // exact normalized match, then "district name contains the school name or
+  // vice-versa" (handles "Woodbine" ↔ "Woodbine School District").
+  let d = dists.find(x => norm(x.name) === target)
+       || dists.find(x => norm(x.name).includes(target) || target.includes(norm(x.name)));
+  if (d) return { districtId: d.id, districtName: d.name };
+
+  // Fall back to organizations (they carry districtId).
+  const ol = await edlioApiCall("GetAllOrganizations", { includeDisabled: true, includeCanceled: true });
+  const orgs = Array.isArray(ol) ? ol : (ol?.items || ol?.organizations || []);
+  const o = orgs.find(x => norm(x.name) === target)
+         || orgs.find(x => norm(x.name).includes(target) || target.includes(norm(x.name)));
+  if (o && o.districtId) {
+    const dm = dists.find(x => x.id === o.districtId);
+    return { districtId: o.districtId, districtName: dm?.name || o.name };
+  }
+  return null;
+}
+
+// Create a dashboard FTP account for an SFTP user that exists on FileMage but
+// has no Edlio FTP account yet. Created DISABLED on purpose: Edlio refuses to
+// enable sync until an org mapping + schema mapping exist (those are built by
+// the schema-mapping step later in this run / on apply). Returns the full
+// edit model of the created account, or throws with the validation errors.
+async function edlioCreateFtpAccount({ userName, districtId }) {
+  const model = await edlioApiCall("GetCreateFtpAccountModel");
+  const base = model?.model || model;
+  base.userName = userName;
+  base.districtId = districtId;
+  base.enabled = false;
+  const created = await edlioApiCall("CreateFtpAccount", { model: base }, { write: true });
+  const newId = created?.id || created?.model?.id;
+  if (!newId) throw new Error(`CreateFtpAccount returned no id: ${JSON.stringify(created).slice(0, 200)}`);
+  // Re-fetch the full edit model so downstream steps get per-role settings etc.
+  const edit = await edlioApiCall("GetEditFtpAccountModel", { id: newId });
+  return edit?.model || edit;
 }
 
 // ==========================================================================

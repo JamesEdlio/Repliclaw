@@ -62,6 +62,18 @@
         "provisioned_now": { "type": ["boolean", "null"] }
       }
     },
+    "dashboard_ftp_account": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "account_id": { "type": ["integer", "null"] },
+        "district_id": { "type": ["integer", "null"] },
+        "district_name": { "type": ["string", "null"] },
+        "enabled": { "type": ["boolean", "null"] },
+        "created_now": { "type": ["boolean", "null"] },
+        "existing": { "type": ["boolean", "null"] }
+      }
+    },
     "outreach": {
       "type": ["object", "null"],
       "additionalProperties": false,

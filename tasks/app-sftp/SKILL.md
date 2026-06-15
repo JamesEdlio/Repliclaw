@@ -1,6 +1,6 @@
 ---
 name: app-sftp
-version: 0.2.2
+version: 0.3.0
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -12,6 +12,9 @@ requires:
   - FILEMAGE_API_KEY
   - OP_SERVICE_ACCOUNT_TOKEN
   - GMAIL_FROM
+  - EDLIOAPP_USER
+  - EDLIOAPP_OP_ITEM_ID
+  - EDLIOAPP_OP_VAULT
 inputs:
   ticket_key:
     type: string
@@ -71,6 +74,7 @@ See `schema.json` for the full contract. Key fields:
 - `status` — `ok | wrong_type | already_sent | needs_input | declined | error`
 - `ticket_key`
 - `filemage_user` — `{ user_id, username, endpoint_name, provisioned_now }`
+- `dashboard_ftp_account` — `{ account_id, district_id, district_name, enabled, created_now, existing }`
 - `outreach` — `{ email_to[], email_cc[], email_sent_at, email_subject, op_share_url, op_share_expires_at, op_item_id }`
 - `forge` — `{ comment_posted, status_transition: { from, to } | null }`
 
@@ -173,6 +177,38 @@ If not found and `dry_run == true`:
 
 - Record the attempted action with status `failed`, `details.error_code`, `details.error_body`.
 - Continue to emit envelope with top-level `status: "error"`.
+
+### Step 5b — Edlio dashboard FTP account (always create if missing)
+
+FileMage holds the SFTP user, but **nothing ingests into Edlio until a matching
+FTP account exists in the app dashboard**. This step provisions it at intake so
+the account is present from day one.
+
+1. Look up an existing dashboard FTP account by username
+   (`edlioFindFtpAccount` → `GetFtpAccountIndex`). If found, record
+   `edlio.ftp.read` and reuse it (no create).
+2. If missing, resolve the district by `ticket.schoolName`
+   (`edlioResolveDistrictId`). Create the account **DISABLED**
+   (`CreateFtpAccount`, `enabled=false`) — Edlio refuses to enable sync until an
+   org + schema mapping exist (built later by **app-sftp-config**, enabled by the
+   operator on apply).
+3. Record `edlio.ftp.create` (`success` / `skipped` / `error`).
+
+**Auth**: uses the Edlio dashboard login flow (`EDLIOAPP_USER` +
+`EDLIOAPP_OP_ITEM_ID`/`EDLIOAPP_OP_VAULT` for password + TOTP via 1Password),
+token cached at `~/.edlio_token_cache.json`. The 1Password item lives in the
+`Agent: Edith` vault by default; the runtime's `op` service account can also read
+the `Agent: DI-Ana - SFTP` vault, so this step works regardless of which vault
+holds the credentials.
+
+**Non-fatal by design**: the intake job (FileMage user + client outreach) is the
+primary deliverable. If the district can't be resolved, dashboard auth is
+missing, or the create call fails, the step records a `warning` note and the run
+continues — it does **not** fail the email send. The later **app-sftp-config**
+run is a safety net that self-provisions the account on apply.
+
+In `dry_run`, the create is skipped (district still resolved for visibility) and
+recorded `status=skipped`, `details.dry_run=true`.
 
 ### Step 5 — 1Password share
 
@@ -343,3 +379,17 @@ Every env var listed in `requires:` is passed by Repliclaw into the replica. `SL
 ## Editing this skill
 
 See Repliclaw's `docs/AUTHORING.md`. Bump `version` on any behavior change. Add fixtures to this task's `tests/` directory before shipping.
+
+## Changelog
+
+### v0.3.0
+- **Always provision the Edlio app-dashboard FTP account** when running against a
+  ticket (new Step 5b). FileMage creates the SFTP user, but nothing ingests into
+  Edlio without a matching dashboard FTP account — so this skill now creates it
+  (DISABLED) at intake. Ported the Edlio dashboard auth + `edlioFindFtpAccount` /
+  `edlioResolveDistrictId` / `edlioCreateFtpAccount` helpers from
+  `app-sftp-config`. Added `EDLIOAPP_USER`, `EDLIOAPP_OP_ITEM_ID`,
+  `EDLIOAPP_OP_VAULT` to `requires:`. New output field `dashboard_ftp_account`.
+  Step is non-fatal (warns, never blocks the client email). Credentials read via
+  the `op` service account, which can reach both `Agent: Edith` and
+  `Agent: DI-Ana - SFTP` vaults.
