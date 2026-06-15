@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.2
+version: 0.7.3
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -91,9 +91,16 @@ uploaded their first sync batch.
 3. **Edlio auth.** Try cached refresh-token. Fall back to
    password+TOTP via `EDLIOAPP_OP_ITEM_ID` (1Password item with
    password + TOTP secret). Cache new refresh token.
-4. **Resolve Edlio FTP account.** Look up by `userName` =
-   FileMage username derived from the ticket. Hard-fail with
-   `needs_filemage` if the FTP account doesn't exist.
+4. **Resolve Edlio FTP account (create if missing).** Look up by
+   `userName` = FileMage username derived from the ticket. If no
+   dashboard FTP account exists, self-provision it: resolve the
+   district by `schoolName` (`GetAllDistricts`, orgs fallback) and
+   `CreateFtpAccount` with `enabled=false`. Edlio won't enable sync
+   until an org + schema mapping exist, so the account is left
+   DISABLED for the operator to enable on apply. Only hard-fails
+   (`needs_district`) if the district can't be resolved — create the
+   district/org in the dashboard first, or pass a `filemage_username`
+   override, then re-run.
 5. **FileMage SSH-key preflight.** Fetch the FileMage user record
    via `GET /users/{id}/` and inspect `keys[]`. If Edith's
    fingerprint (`28:bd:3d:21:…`) is missing, `POST /users/{id}/keys/`
@@ -182,6 +189,26 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.3 — doc accuracy: Step 4 auto-creates the dashboard FTP account
+- No behavior change to FTP provisioning (that shipped in v0.6.0): Step 4
+  already self-provisions a DISABLED Edlio dashboard FTP account when none
+  exists, resolving the district by school name. SKILL.md Step 4 still
+  described the pre-v0.6.0 hard-fail (`needs_filemage`); updated it to document
+  the create-if-missing flow and the only remaining hard-fail (`needs_district`,
+  when the district can't be resolved). Verified live 2026-06-15 by creating
+  the Pierre School District 32-2 account (district 595 → FTP acct 199).
+- Also banks the Woodbine "Other"-role context fix: `canonicalRoleFromValue`
+  now takes an `isFamilyFile` flag. A bare "Other" role value means an
+  extended-family relative ONLY in a family file (one carrying a Relationship
+  ID column); in an employee/staff roster "Other" is non-teaching staff and
+  must not be routed into the guardian/relative family slot. Fixes the bogus
+  `guardianSettings`-from-Staff.csv block seen on Woodbine SS-460.
+- CORRECTION to the v0.7.2 note below: there was no Edlio "write-tier outage."
+  The 500 NullReferenceException on writes came from sending the model FLAT;
+  command writes require it wrapped as `{ $className, model: {...} }`. The
+  skill already wraps correctly; a standalone probe did not, which produced the
+  false outage signal. See knowledge/edlioapp.md.
 
 ### v0.7.2 — collapse unsupported role slots onto the 5 Edlio supports
 - Edlio's CreateSchemaMapping supports exactly five person role-settings slots:

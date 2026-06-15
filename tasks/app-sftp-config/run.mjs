@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.2";
+const SKILL_VERSION = "0.7.3";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -121,7 +121,15 @@ function fullClassroomModel(mapped) {
 // family member tied to a student via a Relationship ID. Collapsing them to
 // parent/guardian/relative is what lets us actually sync families. Returns null
 // if the value maps to nothing recognizable.
-function canonicalRoleFromValue(raw) {
+// `isFamilyFile` = the source CSV carries a Relationship ID column (i.e. it is
+// a family/relationship roster that links parents/guardians/relatives to
+// students). This matters for ambiguous values like "Other": in a family file
+// "Other" is an extended-family relative; in an EMPLOYEE/staff roster "Other"
+// just means a non-teaching staff member (e.g. nurse, aide) and must NOT be
+// routed into the guardian/relative family slot. Misrouting it produces a bogus
+// guardianSettings block sourced from the staff file (seen on Woodbine SS-460,
+// where Staff.csv "Other" rows wrongly landed in guardianSettings).
+function canonicalRoleFromValue(raw, { isFamilyFile = true } = {}) {
   const v = String(raw || "").toLowerCase().trim();
   if (!v) return null;
   if (v.includes("student") || v.includes("pupil") || v.includes("learner")) return "student";
@@ -131,8 +139,12 @@ function canonicalRoleFromValue(raw) {
   if (v.includes("guardian")) return "guardian";
   // Parental relationships (immediate caregivers).
   if (/(^|\b)(parent|father|mother|mom|dad|stepfather|stepmother|step ?parent|step ?par|foster|surrogate)\b/.test(v)) return "parent";
-  // Extended-family / other relationships → relative.
-  if (/(grandparent|grandmother|grandfather|grandma|grandpa|aunt|uncle|sister|brother|sibling|cousin|niece|nephew|relative|other)/.test(v)) return "relative";
+  // Named extended-family relationships → relative (only meaningful in a
+  // family file; in an employee file these would be data anomalies anyway).
+  if (/(grandparent|grandmother|grandfather|grandma|grandpa|aunt|uncle|sister|brother|sibling|cousin|niece|nephew|relative)/.test(v)) return "relative";
+  // Bare "other": ambiguous. In a family file → relative; in an employee
+  // roster → staff (non-teaching staff), never a guardian/relative.
+  if (/(^|\b)other\b/.test(v)) return isFamilyFile ? "relative" : "staff";
   return null;
 }
 
@@ -701,6 +713,12 @@ async function main() {
     });
     if (!roleHeader) return ACTIVE_ROLES;
     f.role_header = roleHeader;
+    // A "family file" carries a Relationship ID column linking family members
+    // to students. Only in such a file does an ambiguous "Other" role value
+    // mean an extended-family relative; in an employee roster it means staff.
+    const isFamilyFile = (headers).some(h =>
+      /relationship/i.test(h) && /\bid\b|ids?$/i.test(h.replace(/[^a-z0-9]+/gi, " ")));
+    f.is_family_file = isFamilyFile;
     // Collect the DISTINCT raw role-value strings that map to each canonical
     // role, preserving original casing/spelling. Edlio's per-role settings block
     // carries a `roleName` filter string (e.g. parent="Mother, Father") that the
@@ -710,7 +728,7 @@ async function main() {
     for (const row of (f.sampleRows || [])) {
       const raw = String(row?.[roleHeader] || "").trim();
       if (!raw) continue;
-      const canon = canonicalRoleFromValue(raw);
+      const canon = canonicalRoleFromValue(raw, { isFamilyFile });
       if (!canon) continue;
       (valuesByCanon[canon] ||= new Set()).add(raw);
     }
@@ -1920,10 +1938,23 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
   };
   // Build the `roleName` filter string for a role from the distinct raw Role
   // values observed in its source file (e.g. parent → "Mother, Father").
+  // Dedup case-insensitively (keep first-seen casing) so "Mother" and "MOTHER"
+  // don't both appear — golden 146 carries "Mother, Father", not dup casings.
+  const dedupNames = (names) => {
+    const seen = new Set();
+    const out = [];
+    for (const n of names) {
+      const key = String(n || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(String(n).trim());
+    }
+    return out;
+  };
   const roleNameFor = (role, fname) => {
     const f = csvByName.get(fname);
     const vals = f && f.role_values_by_canonical && f.role_values_by_canonical[role];
-    if (vals && vals.length) return vals.join(", ");
+    if (vals && vals.length) return dedupNames(vals).join(", ");
     // Fallback: title-case the canonical role (student → "Student").
     return role.charAt(0).toUpperCase() + role.slice(1);
   };
@@ -2011,8 +2042,9 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
     const sb = slotBlocks[slot];
     if (!sb) { payload[`${slot}Settings`] = null; continue; }
     // Merged roleName filter (distinct, comma-joined) so a single staff file
-    // carrying both "Staff" and "Administrator" rows selects both.
-    const names = Array.from(sb.roleNames).filter(Boolean);
+    // carrying both "Staff" and "Administrator" rows selects both. Dedup
+    // case-insensitively to avoid "Mother, MOTHER" style duplicates.
+    const names = dedupNames(Array.from(sb.roleNames).filter(Boolean));
     if (names.length) sb.block.roleName = names.join(", ");
     payload[`${slot}Settings`] = sb.block;
   }
