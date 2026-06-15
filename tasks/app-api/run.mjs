@@ -26,7 +26,8 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.3";
+const SKILL_VERSION = "0.1.4";
+const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
 
@@ -632,6 +633,13 @@ function resolveRecipients(ticket) {
     if (seen.has(lower)) continue;
     seen.add(lower);
     ccList.push(email);
+  }
+
+  // Mandatory: every client email from this agent CCs the data-integrations
+  // distro so the team always has the thread. Deduped against POC/sender.
+  if (!seen.has(DATA_INTEGRATIONS_CC)) {
+    seen.add(DATA_INTEGRATIONS_CC);
+    ccList.push(DATA_INTEGRATIONS_CC);
   }
 
   return { toList, ccList, missingReason: null };

@@ -28,7 +28,8 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.0";
+const SKILL_VERSION = "0.3.1";
+const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
 const ONEPASSWORD_VAULT = "Agent: DI-Ana - SFTP";
@@ -203,6 +204,13 @@ async function main() {
     if (seen.has(lower)) continue;
     seen.add(lower);
     cc.push(email);
+  }
+
+  // Mandatory: every client email from this agent CCs the data-integrations
+  // distro so the team always has the thread. Deduped against POC/sender.
+  if (!seen.has(DATA_INTEGRATIONS_CC)) {
+    seen.add(DATA_INTEGRATIONS_CC);
+    cc.push(DATA_INTEGRATIONS_CC);
   }
 
   // Step 5: FileMage user provision / reuse

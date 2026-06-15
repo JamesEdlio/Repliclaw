@@ -1,6 +1,6 @@
 ---
 name: app-sftp
-version: 0.3.0
+version: 0.3.1
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -381,6 +381,11 @@ Every env var listed in `requires:` is passed by Repliclaw into the replica. `SL
 See Repliclaw's `docs/AUTHORING.md`. Bump `version` on any behavior change. Add fixtures to this task's `tests/` directory before shipping.
 
 ## Changelog
+
+### v0.3.1
+- Always CC `dataintegrations@edlio.com` on every client email (deduped against
+  POC/sender/reporter/assignee). Operator requirement: all agent-sent email must
+  reach the data-integrations distro.
 
 ### v0.3.0
 - **Always provision the Edlio app-dashboard FTP account** when running against a

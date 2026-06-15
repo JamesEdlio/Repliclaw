@@ -1,6 +1,6 @@
 ---
 name: app-api
-version: 0.1.3
+version: 0.1.4
 description: Send the App-API setup email for a Forge ticket. Provider-aware — renders the right setup-guide email per API provider (PowerSchool, Clever, Aeries, Sylogist, etc.), sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -167,3 +167,10 @@ Each records `status=skipped` + `details.dry_run=true` when `dry_run=true`.
 - **Custom PowerSchool plugin** (Artificer flow). A different skill.
 - **API credential ingestion** (when the client replies with URL / client ID / secret). Separate follow-up skill, triggered when the ticket moves to `DATA_CLEANUP` or similar.
 - **SFTP fallback** for districts that can't install plugins. Handled by re-categorizing the ticket to App-SFTP and dragging `app-sftp` onto it.
+
+## Changelog
+
+### v0.1.4
+- Always CC `dataintegrations@edlio.com` on every client email (deduped against
+  POC/sender/reporter/assignee). Operator requirement: all agent-sent email must
+  reach the data-integrations distro.
