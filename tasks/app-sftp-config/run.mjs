@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.3";
+const SKILL_VERSION = "0.7.4";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1930,12 +1930,13 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
   // relationship-link column (for adaptiveRelationship).
   const csvByName = new Map();
   for (const c of csvs) csvByName.set(c.filename, c);
-  const fileHasRelationshipCol = (fname) => {
+  const relationshipColOf = (fname) => {
     const f = csvByName.get(fname);
-    if (!f) return false;
-    return (f.headers || []).some(h =>
-      /relationship/i.test(h) && /\bid\b|ids?$/i.test(h.replace(/[^a-z0-9]+/gi, " ")));
+    if (!f) return null;
+    return (f.headers || []).find(h =>
+      /relationship/i.test(h) && /\bid\b|ids?$/i.test(h.replace(/[^a-z0-9]+/gi, " "))) || null;
   };
+  const fileHasRelationshipCol = (fname) => relationshipColOf(fname) != null;
   // Build the `roleName` filter string for a role from the distinct raw Role
   // values observed in its source file (e.g. parent → "Mother, Father").
   // Dedup case-insensitively (keep first-seen casing) so "Mother" and "MOTHER"
@@ -2047,6 +2048,43 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
     const names = dedupNames(Array.from(sb.roleNames).filter(Boolean));
     if (names.length) sb.block.roleName = names.join(", ");
     payload[`${slot}Settings`] = sb.block;
+  }
+  // RELATIONSHIP INVARIANT (Edlio schema-mapping-automation guide §6):
+  // Relationships must be configured from ONE side only — the adaptive
+  // (student) side. The adaptive role carries `relationshipIdsFieldName`
+  // (the column listing related parent person source-ids) PLUS a
+  // `relationshipType` + `adaptiveRelationship:true`. Every OTHER role block
+  // must have `relationshipIdsFieldName` cleared to null, otherwise:
+  //   (a) IDs-without-type on parent/guardian is rejected ("type must also be
+  //       set"), and
+  //   (b) IDs set on both student and parent/guardian is the documented
+  //       "set up for both Parent and Student side" rejection.
+  // Our field-mapper alias-maps the "Relationship ID" column onto every block
+  // whose source file (the family file) contains it — i.e. student, parent AND
+  // guardian — so without this pass parent/guardian wrongly carry it and Edlio
+  // null-derefs → 500. Golden 146 (Saline) is student-side-only: student has
+  // "Relationship ID", parent/guardian have null. Normalize to match.
+  const adaptiveSlot = adaptiveRole ? EDLIO_ROLE_SLOT[adaptiveRole] : null;
+  const adaptiveRelCol = adaptiveRole && roleMappings[adaptiveRole]
+    ? relationshipColOf(roleMappings[adaptiveRole].csv_file)
+    : null;
+  for (const slot of ["student", "teacher", "staff", "parent", "guardian"]) {
+    const blk = payload[`${slot}Settings`];
+    if (!blk) continue;
+    if (slot === adaptiveSlot && blk.adaptiveRelationship) {
+      // Adaptive role: it OWNS the relationship config. Ensure
+      // relationshipIdsFieldName points at the family file's relationship
+      // column (the field-mapper sometimes alias-maps it onto a sibling block
+      // instead of the student block — golden 146 has it on student). The
+      // relationshipType was assigned above.
+      if (adaptiveRelCol) blk.relationshipIdsFieldName = adaptiveRelCol;
+      continue;
+    }
+    // Non-adaptive role: clear all relationship config so the setup is
+    // single-sided and internally consistent.
+    blk.relationshipIdsFieldName = null;
+    blk.relationshipType = null;
+    blk.adaptiveRelationship = false;
   }
   // Roles Edlio knows about but we never populate — keep them null so the
   // shape is complete (the create template already nulls these, but be explicit

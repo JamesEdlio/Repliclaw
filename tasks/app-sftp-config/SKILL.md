@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.3
+version: 0.7.4
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -189,6 +189,29 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.4 — relationship config: student-side-only (CreateSchemaMapping 500 fix)
+- ROOT CAUSE of the persistent CreateSchemaMapping 500 (NullReferenceException)
+  on Woodbine SS-460, confirmed against Edlio's own `schema-mapping-automation`
+  dev guide (§6 Validation) + the golden-146 fixture:
+  the payload configured relationships from BOTH sides. The field-mapper
+  alias-maps the family file's "Relationship ID" column onto EVERY block whose
+  source file carries it — student, parent AND guardian — so parent/guardian
+  ended up with `relationshipIdsFieldName` set while `relationshipType` was
+  null. Per the guide: (a) "whenever RelationshipIdsFieldName is set, a
+  relationship type must also be set, and vice versa (one without the other
+  fails)", and (b) relationships must be "set up from one side only — either the
+  student side or the parent side, not both." Doing both → backend null-deref →
+  500. Golden 146 is student-side-only: student carries "Relationship ID" +
+  relationshipType + adaptiveRelationship:true; parent/guardian carry null.
+- FIX: after building the five role slots, normalize the relationship config —
+  the adaptive (student) slot OWNS it (ensure `relationshipIdsFieldName` is set
+  from its source file's relationship column, since the mapper sometimes lands
+  it on a sibling); every non-adaptive slot has `relationshipIdsFieldName`,
+  `relationshipType`, and `adaptiveRelationship` forced to null/false.
+- VERIFIED: dry-run on SS-460 now produces field-for-field parity with golden
+  146 (identical top-level keys, 46-key role blocks, 8-key classroom block, and
+  student-side-only adaptive relationship). Ready to apply once re-run.
 
 ### v0.7.3 — doc accuracy: Step 4 auto-creates the dashboard FTP account
 - No behavior change to FTP provisioning (that shipped in v0.6.0): Step 4
