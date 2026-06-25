@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.4
+version: 0.7.5
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -189,6 +189,16 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.5 — fix envelope validation: forge.comment.create missing details
+- The success-path `forge.comment.create` action was emitted with only `ref`
+  and no `details`, failing the repliclaw envelope schema (mutating actions
+  require `details`). A fully successful live run (INT-028, Pierre SD 32-2,
+  schemaMapping id=149 created, FTP 199 configured) was wrongly recorded as
+  `error`. Mutations were real and committed; only the audit envelope failed.
+- Fix: added `details` to the success branch AND hardened the local
+  `recordAction()` to auto-default `details: {}` for non-read verbs, mirroring
+  the repliclaw `ctx.action()` safety net so this class of bug can't recur.
 
 ### v0.7.4 — relationship config: student-side-only (CreateSchemaMapping 500 fix)
 - ROOT CAUSE of the persistent CreateSchemaMapping 500 (NullReferenceException)

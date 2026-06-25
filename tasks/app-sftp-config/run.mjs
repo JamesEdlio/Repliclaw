@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.4";
+const SKILL_VERSION = "0.7.5";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -969,6 +969,7 @@ async function main() {
       type: "forge.comment.create",
       status: "success",
       ref: ticket.key,
+      details: { ticket_key: ticket.key, body_preview: commentBody.slice(0, 200) },
     });
   }
 
@@ -2241,7 +2242,21 @@ function readInputsFromStdin() {
   }
 }
 
-function recordAction(a) { ctx.actions.push({ ts: new Date().toISOString(), ...a }); }
+function recordAction(a) {
+  const action = { ts: new Date().toISOString(), ...a };
+  // Mutating actions must carry details or the envelope schema rejects the run.
+  // Read verbs (.read/.get/.list/.search/.fetch) are exempt.
+  const isRead = /\.(read|get|list|search|fetch)$/.test(action.type || "");
+  if (!isRead && action.details === undefined) {
+    action.details = {};
+    ctx.notes.push({
+      type: "warn",
+      message: `mutating action ${action.type} emitted without details — defaulted to {}`,
+      severity: "warn",
+    });
+  }
+  ctx.actions.push(action);
+}
 function recordNote(message, type = "observation", severity = "info") {
   ctx.notes.push({ type, message, severity });
 }
