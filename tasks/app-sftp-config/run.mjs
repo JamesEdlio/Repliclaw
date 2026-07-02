@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.5";
+const SKILL_VERSION = "0.7.6";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1910,8 +1910,26 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
   // payloads that 500 on CreateSchemaMapping.
   const template = await edlioApiCall("GetCreateSchemaMappingModel");
   const payload = template?.model || template || {};
-  payload.name = ticket.schoolName || ftpAccount.userName;
-  payload.description = ticket.sisProvider || null;
+  // SchemaMapping name = full Edlio district name (e.g. "Woodbine School
+  // District"), NOT the bare ticket.schoolName ("Woodbine"). The Forge ticket
+  // field is often a short form; Edlio's district record is the canonical
+  // full name and is what shows up on the dashboard's External Systems list.
+  // ftpAccount.districtId is the link; resolve the name from GetAllDistricts
+  // (cached in the FTP account's district_name field when created via this
+  // skill). Falls back to ticket.schoolName, then ftpAccount.userName.
+  let schemaName = ticket.schoolName || ftpAccount.userName;
+  if (ftpAccount.districtId) {
+    try {
+      const dl = await edlioApiCall("GetAllDistricts");
+      const dists = Array.isArray(dl) ? dl : (dl?.items || []);
+      const d = dists.find(x => x.id === ftpAccount.districtId);
+      if (d?.name) schemaName = d.name;
+    } catch (err) {
+      process.stderr.write(`[schema-name] GetAllDistricts lookup failed: ${err.message}; using fallback\n`);
+    }
+  }
+  payload.name = schemaName;
+  payload.description = ticket.sisProvider || "SFTP";
   payload.hasMultipleFiles = hasMultipleFiles;
   payload.organizationIdentifierInFiles = organizationIdentifierInFiles;
   payload.acceptedFileNames = acceptedFileNames;
