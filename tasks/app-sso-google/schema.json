@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "app-sso-google data payload",
+  "description": "Data payload for the app-sso-google Forge-native task. Sends the Google Workspace SSO setup email to the ticket POC, posts a confirmation comment with the [app-sso-google] setup-sent marker, and transitions the ticket from BACKLOG to INITIAL_CONTACT. Forge-native: reads/writes via Forge API, never touches Jira.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "ticket_key"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "wrong_type",
+        "already_sent",
+        "needs_input",
+        "declined",
+        "error",
+        "partial"
+      ],
+      "description": "High-level outcome of the task."
+    },
+    "ticket_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sso_type": {
+      "type": ["string", "null"],
+      "description": "The SSO type the skill targeted. Always 'GOOGLE_SAML' for this skill (kept in the payload for symmetry with app-api's provider field and to support future variant skills)."
+    },
+    "sso_type_source": {
+      "type": ["string", "null"],
+      "enum": [null, "skill_default", "input_override", "ticket_field"],
+      "description": "Where the SSO type was sourced from. Always 'skill_default' for app-sso-google unless an override is supplied."
+    },
+    "declined_reason": {
+      "type": "string",
+      "description": "Human-readable reason when status is wrong_type / declined."
+    },
+    "routing_suggestion": {
+      "type": "string",
+      "description": "If declined due to wrong_type, a hint about who should handle it instead."
+    },
+    "missing": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Field names that need human input when status is needs_input."
+    },
+    "note": {
+      "type": "string",
+      "description": "Free-form explanation accompanying a non-ok status."
+    },
+    "prior_run": {
+      "type": ["object", "null"],
+      "description": "Populated when status is already_sent. Extracted from the prior [app-sso-google] setup-sent marker comment.",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": { "type": ["string", "null"] },
+        "ts": { "type": ["string", "null"] },
+        "skill_version": { "type": ["string", "null"] },
+        "comment_id": { "type": ["string", "null"] },
+        "author": { "type": ["string", "null"] }
+      }
+    },
+    "outreach": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "email_to": {
+          "type": "array",
+          "items": { "type": "string", "format": "email" }
+        },
+        "email_cc": {
+          "type": "array",
+          "items": { "type": "string", "format": "email" }
+        },
+        "email_subject": { "type": ["string", "null"] },
+        "email_sent_at": { "type": ["string", "null"], "format": "date-time" },
+        "template": { "type": ["string", "null"] },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Short machine-readable reason tag when email was not sent (e.g. missing_poc_email, already_sent)."
+        }
+      }
+    },
+    "forge": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "comment_posted": { "type": "boolean" },
+        "comment_id": { "type": ["string", "null"] },
+        "status_transition": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "string" },
+            "to": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
