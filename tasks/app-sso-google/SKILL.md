@@ -1,6 +1,6 @@
 ---
 name: app-sso-google
-version: 0.1.0
+version: 0.1.1
 description: Send the Google Workspace SSO setup email for a Forge ticket. Renders the Google Workspace SSO setup guide email, sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira. Modeled on app-api with the provider dimension collapsed to the single SSO type this skill handles.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs

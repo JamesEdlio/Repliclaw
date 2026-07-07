@@ -4,7 +4,10 @@
   "description": "Data payload for the app-sso-google Forge-native task. Sends the Google Workspace SSO setup email to the ticket POC, posts a confirmation comment with the [app-sso-google] setup-sent marker, and transitions the ticket from BACKLOG to INITIAL_CONTACT. Forge-native: reads/writes via Forge API, never touches Jira.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "ticket_key"],
+  "required": [
+    "status",
+    "ticket_key"
+  ],
   "properties": {
     "status": {
       "type": "string",
@@ -24,12 +27,23 @@
       "minLength": 1
     },
     "sso_type": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The SSO type the skill targeted. Always 'GOOGLE_SAML' for this skill (kept in the payload for symmetry with app-api's provider field and to support future variant skills)."
     },
     "sso_type_source": {
-      "type": ["string", "null"],
-      "enum": [null, "skill_default", "input_override", "ticket_field"],
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        null,
+        "skill_default",
+        "input_override",
+        "ticket_field"
+      ],
       "description": "Where the SSO type was sourced from. Always 'skill_default' for app-sso-google unless an override is supplied."
     },
     "declined_reason": {
@@ -42,7 +56,9 @@
     },
     "missing": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Field names that need human input when status is needs_input."
     },
     "note": {
@@ -50,54 +66,152 @@
       "description": "Free-form explanation accompanying a non-ok status."
     },
     "prior_run": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Populated when status is already_sent. Extracted from the prior [app-sso-google] setup-sent marker comment.",
       "additionalProperties": false,
       "properties": {
-        "run_id": { "type": ["string", "null"] },
-        "ts": { "type": ["string", "null"] },
-        "skill_version": { "type": ["string", "null"] },
-        "comment_id": { "type": ["string", "null"] },
-        "author": { "type": ["string", "null"] }
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skill_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "comment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "outreach": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
       "properties": {
         "email_to": {
           "type": "array",
-          "items": { "type": "string", "format": "email" }
+          "items": {
+            "type": "string",
+            "format": "email"
+          }
         },
         "email_cc": {
           "type": "array",
-          "items": { "type": "string", "format": "email" }
+          "items": {
+            "type": "string",
+            "format": "email"
+          }
         },
-        "email_subject": { "type": ["string", "null"] },
-        "email_sent_at": { "type": ["string", "null"], "format": "date-time" },
-        "template": { "type": ["string", "null"] },
+        "email_subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email_sent_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reason": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Short machine-readable reason tag when email was not sent (e.g. missing_poc_email, already_sent)."
+        },
+        "sso_type_ticket": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "SSO type as recorded on the ticket (ssoTypeApp), for audit."
         }
       }
     },
     "forge": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
       "properties": {
-        "comment_posted": { "type": "boolean" },
-        "comment_id": { "type": ["string", "null"] },
+        "comment_posted": {
+          "type": "boolean"
+        },
+        "comment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status_transition": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
-          "required": ["from", "to"],
+          "required": [
+            "from",
+            "to"
+          ],
           "properties": {
-            "from": { "type": "string" },
-            "to": { "type": "string" }
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
           }
         }
       }
+    },
+    "skill_version": {
+      "type": "string",
+      "description": "Version of the skill that produced this result."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "Whether this run was a dry run (no side effects)."
+    },
+    "triggered_by": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Email of the operator who triggered the run, if known."
     }
   }
 }

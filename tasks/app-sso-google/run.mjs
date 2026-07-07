@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.0";
+const SKILL_VERSION = "0.1.1";
 const MARKER_TAG = "[app-sso-google]";
 const MARKER_EVENT = "setup-sent";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
