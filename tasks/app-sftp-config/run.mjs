@@ -2307,6 +2307,9 @@ function recordAction(a) {
   ctx.actions.push(action);
 }
 function recordNote(message, type = "observation", severity = "info") {
+  // Coerce to the schema enum: ["info","warn","error"]. "warning" -> "warn", unknown -> "info".
+  const SEV = { info: "info", warn: "warn", warning: "warn", error: "error" };
+  severity = SEV[String(severity).toLowerCase()] || "info";
   ctx.notes.push({ type, message, severity });
 }
 function recordError(where, err) {

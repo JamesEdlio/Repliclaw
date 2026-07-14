@@ -297,7 +297,7 @@ async function main() {
         recordNote(
           `dry-run: could not resolve an Edlio district for schoolName=` +
           `${JSON.stringify(schoolName)}; live run would skip dashboard FTP create`,
-          "provision", "warning");
+          "provision", "warn");
       }
     } else {
       const resolved = await edlioResolveDistrictId(schoolName);
@@ -314,7 +314,7 @@ async function main() {
           `could not resolve an Edlio district for schoolName=${JSON.stringify(schoolName)}; ` +
           `dashboard FTP account NOT created. Create the district/org in the ` +
           `dashboard, then re-run or let app-sftp-config provision it on apply.`,
-          "provision", "warning");
+          "provision", "warn");
       } else {
         const acct = await edlioCreateFtpAccount({
           userName: username, districtId: resolved.districtId,
@@ -352,7 +352,7 @@ async function main() {
     recordNote(
       `dashboard FTP account step failed (non-fatal): ${err.message}. FileMage ` +
       `user + outreach completed; app-sftp-config will self-provision on apply.`,
-      "provision", "warning");
+      "provision", "warn");
   }
 
   // Step 6: 1Password item create + share
@@ -1059,6 +1059,10 @@ function routingHint(ticket) {
 
 function recordAction(a) { ctx.actions.push({ ts: new Date().toISOString(), ...a }); }
 function recordNote(message, type = "observation", severity = "info") {
+  // Coerce to the schema's allowed enum: ["info","warn","error"].
+  // Common mistakes: "warning" -> "warn", anything unknown -> "info".
+  const SEV = { info: "info", warn: "warn", warning: "warn", error: "error" };
+  severity = SEV[String(severity).toLowerCase()] || "info";
   ctx.notes.push({ type, message, severity });
 }
 function recordError(where, err) {
