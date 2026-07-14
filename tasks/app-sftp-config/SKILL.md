@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.5
+version: 0.7.7
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -189,6 +189,34 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.7 — role-gate identity fields (parent/guardian studentId clash, INT-054)
+- ROOT CAUSE (edlio/app-monorepo#1227, INT-054): the alias matcher
+  (`mapRoleColumns`) runs the FULL `person_fields` set against EVERY role, so a
+  parent/guardian/relative roster carrying a "Student ID" column — family files
+  legitimately have one, to link the guardian to their student — got
+  `studentIdFieldName` mapped into `parentSettings`/`guardianSettings`. Edlio
+  then treated the parent's studentId as a real student identity → parent/
+  guardian accounts CLASHED with the actual students on that ID (the UI can't
+  even set this field; only the API can). Dev is adding the matching validator
+  server-side (studentId* → student only; employeeId → teacher/staff/admin).
+- FIX (mirrors the server validator, two layers):
+  1. `mapRoleColumns`: after auto-mapping, strip `studentIdFieldName` /
+     `alternateStudentIdFieldName` from any non-`student` role and
+     `employeeIdFieldName` from any role that isn't teacher/staff/administrator
+     (`ROLE_ONLY_IDENTITY_FIELDS`).
+  2. Defense-in-depth at slot emit: null studentId* on any slot != student and
+     employeeId on any slot not in {teacher, staff}.
+- CLEANUP: scanned all 143 live schema mappings; only #149 (Pierre SD 32-2,
+  INT-028) and #150 (Woodbine SD) were corrupted — both had studentIdFieldName
+  set on parent+guardian. Nulled via EditSchemaMapping; re-scan = 0/143 bad.
+  Before/after snapshots in edith/research/int054-cleanup/.
+
+### v0.7.6 — schema mapping name uses full Edlio district name
+- Mapping name resolved from `GetAllDistricts` via `ftpAccount.districtId`
+  (falls back to ticket.schoolName / ftpAccount.userName). Description defaults
+  to "SFTP" when sisProvider is missing. Fixes Woodbine showing bare "Woodbine"
+  instead of "Woodbine School District".
 
 ### v0.7.5 — fix envelope validation: forge.comment.create missing details
 - The success-path `forge.comment.create` action was emitted with only `ref`

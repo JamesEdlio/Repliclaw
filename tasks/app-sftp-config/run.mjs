@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.6";
+const SKILL_VERSION = "0.7.7";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -1799,6 +1799,22 @@ function mapRoleColumns(role, file, override = null) {
     }
   }
 
+  // Role-gate identity fields. The alias matcher runs the FULL person_fields
+  // set against every role, so a parent/guardian/relative roster that carries
+  // a "Student ID" column (family files legitimately have one — it links the
+  // guardian to their student) wrongly gets studentIdFieldName mapped into
+  // parentSettings. Edlio then treats the parent's studentId as a real student
+  // identity → parent/guardian accounts CLASH with the actual students on that
+  // ID (app-monorepo#1227, INT-054). Same hazard for employeeIdFieldName on
+  // non-staff roles. Enforce the same invariant Edlio's API validator does:
+  //   studentIdFieldName / alternateStudentIdFieldName → student role only
+  //   employeeIdFieldName                              → teacher/staff/admin only
+  for (const [field, allowedRoles] of Object.entries(ROLE_ONLY_IDENTITY_FIELDS)) {
+    if (auto_mapped[field] && !allowedRoles.includes(role)) {
+      delete auto_mapped[field];
+    }
+  }
+
   for (const f of required) {
     if (!auto_mapped[f]) missing_required.push(f);
   }
@@ -1810,6 +1826,15 @@ function mapRoleColumns(role, file, override = null) {
     missing_required,
   };
 }
+
+// Identity fields that are only valid on specific roles. Mirrors the Edlio
+// create/edit SchemaMapping API validator (app-monorepo#1227): mapping these
+// onto the wrong role's *Settings block corrupts identity resolution.
+const ROLE_ONLY_IDENTITY_FIELDS = {
+  studentIdFieldName: ["student"],
+  alternateStudentIdFieldName: ["student"],
+  employeeIdFieldName: ["teacher", "staff", "administrator"],
+};
 
 function scoreHeaderMatch(header, label, aliases) {
   const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -2066,6 +2091,12 @@ async function buildSchemaMappingPayload({ ticket, ftpAccount, csvs, roleMapping
     // case-insensitively to avoid "Mother, MOTHER" style duplicates.
     const names = dedupNames(Array.from(sb.roleNames).filter(Boolean));
     if (names.length) sb.block.roleName = names.join(", ");
+    // Defense-in-depth: scrub identity fields illegal for this Edlio slot even
+    // if they slipped through mapRoleColumns (overrides, merges). studentId*
+    // only on the student slot; employeeId only on teacher/staff (admin
+    // collapses into staff). See app-monorepo#1227 / INT-054.
+    if (slot !== "student") { sb.block.studentIdFieldName = null; sb.block.alternateStudentIdFieldName = null; }
+    if (slot !== "teacher" && slot !== "staff") { sb.block.employeeIdFieldName = null; }
     payload[`${slot}Settings`] = sb.block;
   }
   // RELATIONSHIP INVARIANT (Edlio schema-mapping-automation guide §6):
