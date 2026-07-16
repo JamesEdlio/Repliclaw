@@ -28,7 +28,7 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.1";
+const SKILL_VERSION = "0.3.2";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
@@ -106,6 +106,10 @@ const ctx = {
   dryRun,
   triggeredBy,
   forceRerun: inputs.force_rerun === true,
+  extraInstructions:
+    typeof inputs.extra_instructions === "string"
+      ? inputs.extra_instructions
+      : "",
   actions: [],
   notes: [],
   errors: [],
@@ -419,6 +423,7 @@ async function main() {
     reporter_name: reporterName,
     sis_provider: sisProvider,
     onepassword_link: opMeta.share_url || "PENDING",
+    extra_instructions_block: buildExtraInstructionsBlock(ctx.extraInstructions),
   });
   const emailSubject = `SFTP Setup — ${schoolName}`;
   const sentAt = new Date().toISOString();
@@ -433,6 +438,7 @@ async function main() {
         cc,
         subject: emailSubject,
         body_bytes: emailBody.length,
+        extra_instructions_included: Boolean((ctx.extraInstructions || "").trim()),
       },
     });
   } else {
@@ -445,7 +451,7 @@ async function main() {
     recordAction({
       type: "gmail.message.send",
       status: "success",
-      details: { to, cc, subject: emailSubject },
+      details: { to, cc, subject: emailSubject, extra_instructions_included: Boolean((ctx.extraInstructions || "").trim()) },
     });
   }
 
@@ -1026,6 +1032,25 @@ function readInputsFromStdin() {
 
 function isValidEmail(s) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+}
+
+// HTML-escape untrusted text for safe insertion into the email body.
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+// Build the optional custom-instructions paragraph. Empty string when blank,
+// so the standard email is unchanged byte-for-byte. Newlines -> <br>.
+function buildExtraInstructionsBlock(raw) {
+  const text = (raw || "").trim();
+  if (!text) return "";
+  const html = escapeHtml(text).replaceAll("\n", "<br>");
+  return `<p>${html}</p>`;
 }
 
 function generatePassword(len = 24) {

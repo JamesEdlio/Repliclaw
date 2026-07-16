@@ -1,6 +1,6 @@
 ---
 name: app-sftp
-version: 0.3.1
+version: 0.3.2
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -28,6 +28,10 @@ inputs:
     type: boolean
     required: false
     description: If true, bypass the dup-send guard and send the setup email even if a prior [app-sftp] setup-sent marker is found in ticket comments. Use with care.
+  extra_instructions:
+    type: string
+    required: false
+    description: Optional free-text note added as its own paragraph in the setup email, immediately after the SFTP connection details and before the sign-off. HTML-escaped; newlines become line breaks. When blank/absent, the email is unchanged. Use for one-off context like "once you loop in X, reply and I'll regenerate the credential link so they have access too."
 outputs:
   status:
     type: string
