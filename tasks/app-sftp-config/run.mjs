@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.7";
+const SKILL_VERSION = "0.7.8";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -61,6 +61,17 @@ const ALIAS_AUTO_THRESHOLD = 0.85;
 // Person roles we sync. Each gets a *Settings block on both the SchemaMapping
 // and the FTP account.
 const ACTIVE_ROLES = ["student", "teacher", "staff", "parent", "guardian", "relative", "administrator"];
+
+// Identity fields that are only valid on specific roles. Mirrors the Edlio
+// create/edit SchemaMapping API validator (app-monorepo#1227): mapping these
+// onto the wrong role's *Settings block corrupts identity resolution.
+// Declared here (top of module) so it is initialized before mapRoleColumns()
+// runs under top-level await. (Was previously declared below its use → TDZ.)
+const ROLE_ONLY_IDENTITY_FIELDS = {
+  studentIdFieldName: ["student"],
+  alternateStudentIdFieldName: ["student"],
+  employeeIdFieldName: ["teacher", "staff", "administrator"],
+};
 
 // Canonical full field set for a per-role *Settings block, as Edlio's
 // CreateSchemaMapping/EditSchemaMapping deserializer expects it. Every key MUST
@@ -1826,15 +1837,6 @@ function mapRoleColumns(role, file, override = null) {
     missing_required,
   };
 }
-
-// Identity fields that are only valid on specific roles. Mirrors the Edlio
-// create/edit SchemaMapping API validator (app-monorepo#1227): mapping these
-// onto the wrong role's *Settings block corrupts identity resolution.
-const ROLE_ONLY_IDENTITY_FIELDS = {
-  studentIdFieldName: ["student"],
-  alternateStudentIdFieldName: ["student"],
-  employeeIdFieldName: ["teacher", "staff", "administrator"],
-};
 
 function scoreHeaderMatch(header, label, aliases) {
   const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
