@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.8
+version: 0.7.9
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -189,6 +189,23 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.7.9 — record-aware CSV parser (embedded-newline headers) + action-type fix
+- ROOT CAUSE (INT-033 NYOS): some SIS exports (Infinite Campus family) emit a
+  header cell with a literal newline inside the quotes, e.g. `"Employee ID\n"`.
+  The old parser did `raw.split(/\r?\n/)` FIRST, then parsed each physical line,
+  so a quoted embedded newline split the header record — only 2 of 13 columns
+  were detected and every real field showed as `missing_required`, blocking the
+  mapping with a bogus `needs_input`.
+- FIX: replaced naive line-splitting with `csvRecords()`, a record-aware
+  tokenizer that respects quoted fields, escaped quotes (""), embedded newlines,
+  and \r\n / \r endings. Delimiter auto-detected from the first physical line.
+  Header cells get any stray embedded newlines squashed to a space + trimmed.
+- Also fixed cosmetic action-type validation error: `edlio.ftp.read-after-create`
+  contained a hyphen (violates action-type pattern), flagging successful runs as
+  `error`. Renamed to `edlio.ftp.readaftercreate`.
+- Verified on INT-033 (NYOS Staff.csv, 13 cols, 274 rows): parses all columns,
+  classifies as multi-role, zero missing_required, status=ok/configured.
 
 ### v0.7.7 — role-gate identity fields (parent/guardian studentId clash, INT-054)
 - ROOT CAUSE (edlio/app-monorepo#1227, INT-054): the alias matcher

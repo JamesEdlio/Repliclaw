@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.8";
+const SKILL_VERSION = "0.7.9";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -385,7 +385,7 @@ async function main() {
     }
   }
   recordAction({
-    type: ftpAccountCreated ? "edlio.ftp.read-after-create" : "edlio.ftp.read",
+    type: ftpAccountCreated ? "edlio.ftp.readaftercreate" : "edlio.ftp.read",
     status: "success",
     ref: `edlio:ftp:${ftpAccount.id}`,
     details: {
@@ -1592,24 +1592,29 @@ function readCsvSample(path, maxRows) {
   // Strip BOM
   if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
 
-  const lines = raw.split(/\r?\n/).filter(l => l.length > 0);
-  if (!lines.length) return { headers: [], rows: [] };
+  // Tokenize into RECORDS (not naive lines): a quoted field may contain
+  // embedded newlines, so splitting on \n first corrupts such files. Some
+  // SIS exports (e.g. Infinite Campus) emit headers like "Employee ID\n"
+  // with a literal newline inside the quotes — record-aware tokenizing keeps
+  // all columns intact.
+  const records = csvRecords(raw).filter(r => r.length > 0 && !(r.length === 1 && r[0] === ""));
+  if (!records.length) return { headers: [], rows: [] };
 
-  // Detect delimiter: comma vs tab vs semicolon.
-  const first = lines[0];
-  const delim = pickDelimiter(first);
+  // Detect delimiter from the first record's raw form is unnecessary now —
+  // csvRecords auto-detects. Headers = first record, trimmed (also strip any
+  // embedded newlines that leaked into a header cell).
+  const headers = records[0].map(h => String(h).replace(/[\r\n]+/g, " ").trim());
 
-  const parseLine = (line) => parseCsvLine(line, delim);
-  const headers = parseLine(lines[0]).map(h => h.trim());
-
-  // Parse a row line into an object keyed by header.
-  const toRow = (line) => {
-    const cells = parseLine(line);
-    if (cells.length === 0) return null;
+  // Parse a record (array of cells) into an object keyed by header.
+  const toRow = (cells) => {
+    if (!cells || cells.length === 0) return null;
     const row = {};
     for (let j = 0; j < headers.length; j++) row[headers[j]] = cells[j] ?? "";
     return row;
   };
+
+  // Rebind "lines" to the data records for the sampling logic below.
+  const lines = records;
 
   // Role-diversified sampling: person rosters are often sorted by role (e.g.
   // all Students first, then Parents/Guardians). A naive top-N sample then
@@ -1667,6 +1672,51 @@ function pickDelimiter(line) {
     if (n > bestCount) { best = d; bestCount = n; }
   }
   return best;
+}
+
+// Record-aware CSV tokenizer. Splits raw text into an array of records, each a
+// string[] of cell values. Correctly handles: quoted fields, escaped quotes
+// (""), embedded newlines inside quotes, \r\n and \r line endings, and BOM
+// (stripped by caller). Delimiter auto-detected from the header record.
+function csvRecords(raw) {
+  const delim = pickDelimiter(firstPhysicalLine(raw));
+  const records = [];
+  let field = "";
+  let record = [];
+  let inQuote = false;
+  let started = false; // whether current record has any content
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (inQuote) {
+      if (c === '"') {
+        if (raw[i + 1] === '"') { field += '"'; i++; }
+        else inQuote = false;
+      } else {
+        field += c;
+      }
+    } else {
+      if (c === '"') { inQuote = true; started = true; }
+      else if (c === delim) { record.push(field); field = ""; started = true; }
+      else if (c === "\n" || c === "\r") {
+        // consume \r\n as one break
+        if (c === "\r" && raw[i + 1] === "\n") i++;
+        record.push(field);
+        records.push(record);
+        field = ""; record = []; started = false;
+      } else { field += c; started = true; }
+    }
+  }
+  // flush trailing field/record if any content pending
+  if (started || field.length > 0 || record.length > 0) {
+    record.push(field);
+    records.push(record);
+  }
+  return records;
+}
+
+function firstPhysicalLine(raw) {
+  const idx = raw.search(/[\r\n]/);
+  return idx === -1 ? raw : raw.slice(0, idx);
 }
 
 function parseCsvLine(line, delim = ",") {
