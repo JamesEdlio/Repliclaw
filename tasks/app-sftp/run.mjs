@@ -28,7 +28,7 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.2";
+const SKILL_VERSION = "0.3.3";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
@@ -901,18 +901,21 @@ function dashboardToFileMageEndpoint(dashboard) {
   // The canonical SFTP endpoint names follow the dashboard brand.
   const map = {
     EDLIO: "Edlio",
-    SIA_US: "SIA-US",
-    SIA_CA: "SIA-CA",
-    SAE: "SAE",
-    ESV: "eSV",
-    REACH_US: "Reach-US",
-    REACH_CA: "Reach-CA",
-    REACH_AUS: "Reach-AUS",
-    CMS4SCHOOLS: "CMS4Schools",
-    APPS_BY_SIA: "APPS by SIA",
-    SYNTAXNY: "SyntaxNY",
-    SCHOOLPLANNER: "SchoolPlanner",
+    SIA_US: "SchoolInfoApp US",
+    SIA_CA: "SchoolInfoApp CA",
+    SAE: "SchoolAppExpress",
+    ESV: "ESchoolView",
+    CMS4SCHOOLS: "Cms4Schools",
     SCHOOLWEBMASTERS: "SchoolWebmasters",
+    BRIGHTARROW: "BrightArrow",
+    MYEXCELLENTAPP: "MyExcellentApp",
+    // Brands below have no dedicated FileMage endpoint; fall back to Edlio.
+    REACH_US: "Edlio",
+    REACH_CA: "Edlio",
+    REACH_AUS: "Edlio",
+    APPS_BY_SIA: "Edlio",
+    SYNTAXNY: "Edlio",
+    SCHOOLPLANNER: "Edlio",
   };
   return map[dashboard] || "Edlio"; // safe default
 }
