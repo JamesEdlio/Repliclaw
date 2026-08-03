@@ -1,0 +1,6 @@
+{{GREETING}}
+
+We have received your request to integrate {{TYPE}} with your Edlio app dashboard. A Data Integration team member will reach out as soon as possible.
+
+Thank you!
+Edlio Data Integrations

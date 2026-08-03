@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "bard-first-contact data payload",
+  "description": "Data payload for the bard-first-contact Forge-native task (v0.1.0).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "ticket_key"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "already_sent", "needs_input", "declined", "error", "partial"],
+      "description": "High-level outcome of the task."
+    },
+    "ticket_key": {
+      "type": ["string", "null"],
+      "description": "Forge ticket key. Null only when the input was missing entirely."
+    },
+    "type": {
+      "type": ["string", "null"],
+      "enum": [null, "SFTP", "API", "SSO", "SIS", "LDAP"],
+      "description": "The {TYPE} token rendered into the subject and body, derived from ticket.integrationType."
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "Human-readable explanation accompanying a non-ok status."
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ticket fields a human must fill in before this can send. Populated when status is needs_input."
+    },
+    "prior_marker_at": {
+      "type": ["string", "null"],
+      "description": "Timestamp of the pre-existing marker comment, when status is already_sent."
+    },
+    "outreach": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string" },
+        "reply_to": { "type": "string" },
+        "to": { "type": "array", "items": { "type": "string" } },
+        "cc": { "type": "array", "items": { "type": "string" } },
+        "subject": { "type": "string" },
+        "greeting_name": {
+          "type": ["string", "null"],
+          "description": "POC name used in the greeting line. Null means the bare 'Hello,' fallback was used."
+        }
+      }
+    },
+    "forge": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "marker_posted": {
+          "type": "boolean",
+          "description": "Whether the idempotency marker comment landed. False with status=partial means a re-run could double-send."
+        }
+      }
+    },
+    "skill_version": { "type": "string" },
+    "dry_run": { "type": "boolean" },
+    "triggered_by": {
+      "type": ["string", "null"],
+      "description": "Email of the human or scheduler that dispatched this run."
+    }
+  }
+}
