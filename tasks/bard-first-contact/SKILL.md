@@ -1,6 +1,6 @@
 ---
 name: bard-first-contact
-version: 0.1.0
+version: 0.2.0
 description: Send the Data Integrations first-contact acknowledgement for a Forge ticket, from di@edlio.com with Reply-To dataintegrations@edlio.com. Edith-native replacement for Diana's `bard` skill. Acknowledgement only — tells the client we received their request and a human will follow up. Does NOT provision credentials or send setup instructions. Works across all products and integration types (App / CMS / Pay).
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -142,6 +142,14 @@ The task declines rather than sends when:
 3. **No POC email** → `needs_input` with `missing_fields: ["pocEmail"]`. A
    human must source the contact.
 4. **Unknown `integrationType`** → `declined`.
+5. **`kind` is not `NEW_INTEGRATION`** → `declined`. First contact is an
+   acknowledgement of a *new integration request*; sending it to a client who
+   filed an Issue about a broken live sync reads as if nobody read the ticket
+   (the SS-449 failure mode). Issue-class tickets go to human triage.
+   Verified against `di@`'s Sent folder on 8/3: of the backlog tickets Bard
+   acked, **all** were `NEW_INTEGRATION` and **none** were `ISSUE`.
+   `liveStatus` is *not* the discriminator — Bard acked LIVE
+   `NEW_INTEGRATION` tickets (INT-080/082/087).
 
 Comment-read failure is **fail-closed**: if we can't verify the marker, we do
 not send, because the downside of a duplicate client email is worse than the
@@ -190,6 +198,15 @@ before re-running.
 No 1Password or FileMage access needed — this task provisions nothing.
 
 ## Changelog
+
+### 0.2.0 — 2026-08-03
+Added the **Issue-class guard** (`kind != NEW_INTEGRATION` → `declined`).
+Found while building `scan-first-contact.mjs`: the pre-filter surfaced 19
+apparently-eligible BACKLOG tickets, 12 of which were `ISSUE` on live
+integrations. Without this guard a cutover scan would have mailed
+"thanks for your new integration request" to a dozen clients reporting broken
+syncs. Confirmed Bard's real rule by diffing acked vs un-acked tickets against
+`di@`'s Sent folder.
 
 ### 0.1.0 — 2026-08-03
 Initial release. Ports Diana's `bard` first-contact behaviour: verbatim

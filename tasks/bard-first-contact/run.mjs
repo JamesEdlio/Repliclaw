@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.0";
+const SKILL_VERSION = "0.2.0";
 const TASK_NAME = "bard-first-contact";
 
 const FROM_ADDRESS = "di@edlio.com";
@@ -147,6 +147,27 @@ async function main() {
       status: "declined",
       ticket_key: ticketKey,
       reason: `unsupported integrationType: ${ticket.integrationType ?? "(none)"}`,
+    });
+  }
+
+  // --- 2b. Issue-class guard ---------------------------------------------
+  // Bard only ever acked kind=NEW_INTEGRATION. Verified 8/3 against di@'s Sent
+  // folder: all 13 acked backlog tickets are NEW_INTEGRATION, all 12 Issue-class
+  // ones were skipped — and liveStatus is NOT the discriminator (LIVE
+  // NEW_INTEGRATION tickets were acked). Acking an Issue on a live integration
+  // sends "thanks for your new integration request" to a client reporting a
+  // broken sync — the SS-449 failure mode. Issue tickets go to human triage.
+  const kind = ticket.kind ?? null;
+  if (kind !== "NEW_INTEGRATION") {
+    recordNote(
+      `ticket kind is ${kind ?? "(none)"}, not NEW_INTEGRATION; first contact is for new integrations only`,
+      "guardrail",
+      "info"
+    );
+    return done({
+      status: "declined",
+      ticket_key: ticketKey,
+      reason: `kind ${kind ?? "(none)"} is not NEW_INTEGRATION — Issue-class tickets need human triage`,
     });
   }
 
