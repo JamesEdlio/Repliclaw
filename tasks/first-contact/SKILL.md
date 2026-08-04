@@ -1,5 +1,5 @@
 ---
-name: bard-first-contact
+name: first-contact
 version: 0.2.0
 description: Send the Data Integrations first-contact acknowledgement for a Forge ticket, from di@edlio.com with Reply-To dataintegrations@edlio.com. Edith-native replacement for Diana's `bard` skill. Acknowledgement only — tells the client we received their request and a human will follow up. Does NOT provision credentials or send setup instructions. Works across all products and integration types (App / CMS / Pay).
 repliclawEnvelopeVersion: 0.2.0
@@ -40,7 +40,7 @@ outputs:
 outputs_schema: ./schema.json
 ---
 
-# bard-first-contact — Data Integrations acknowledgement email
+# first-contact — Data Integrations acknowledgement email
 
 > **Implementation note:** deterministic task, run via `exec:`. Repliclaw
 > executes `./run.mjs` directly rather than spawning an LLM replica. This
@@ -134,7 +134,7 @@ guessed email.
 
 The task declines rather than sends when:
 
-1. **Already acked** — a `[bard-first-contact] ack-sent` marker comment exists
+1. **Already acked** — a `[first-contact] ack-sent` marker comment exists
    → `already_sent`.
 2. **Setup email already out** — an `[app-sftp]`, `[app-api]` or
    `[app-sso-google]` marker exists. Acking *after* full instructions have
@@ -168,7 +168,7 @@ is visible to humans in the Discussion tab.
 Marker first line:
 
 ```
-[bard-first-contact] ack-sent
+[first-contact] ack-sent
 ```
 
 **Known window:** if the email sends but the marker POST fails after all

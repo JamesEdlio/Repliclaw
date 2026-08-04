@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "bard-first-contact data payload",
-  "description": "Data payload for the bard-first-contact Forge-native task (v0.1.0).",
+  "title": "first-contact data payload",
+  "description": "Data payload for the first-contact Forge-native task (v0.1.0).",
   "type": "object",
   "additionalProperties": false,
   "required": ["status", "ticket_key"],

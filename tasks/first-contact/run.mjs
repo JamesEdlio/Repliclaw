@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * bard-first-contact — send the Data Integrations first-contact
+ * first-contact — send the Data Integrations first-contact
  * acknowledgement for a Forge ticket, from di@edlio.com.
  *
  * This is the Edith-native replacement for Diana's `bard` skill (Tier 1 of
@@ -23,13 +23,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const SKILL_VERSION = "0.2.0";
-const TASK_NAME = "bard-first-contact";
+const TASK_NAME = "first-contact";
 
 const FROM_ADDRESS = "di@edlio.com";
 const REPLY_TO = "dataintegrations@edlio.com";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 
-const MARKER_TAG = "[bard-first-contact]";
+const MARKER_TAG = "[first-contact]";
 const MARKER_EVENT = "ack-sent";
 
 // If any of these markers is already on the ticket, a *full* setup email has
