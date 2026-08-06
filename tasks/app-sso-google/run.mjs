@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.1";
+const SKILL_VERSION = "0.1.2";
 const MARKER_TAG = "[app-sso-google]";
 const MARKER_EVENT = "setup-sent";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
@@ -112,6 +112,11 @@ const dryRun = inputs.dry_run === true;
 const triggeredBy = typeof inputs.triggered_by === "string" && inputs.triggered_by
   ? inputs.triggered_by
   : null;
+
+// Gmail identifiers for the message we send, captured at send time. Module
+// scope because buildCommentBody() folds them into the marker line.
+let gmailThreadId = null;
+let gmailMessageId = null;
 
 const ctx = {
   runId,
@@ -266,11 +271,17 @@ async function main() {
     });
   } else {
     try {
-      await gmailSend({ to: toList, cc: ccList, subject, htmlBody });
+      const sent = await gmailSend({ to: toList, cc: ccList, subject, htmlBody });
+      gmailThreadId = sent.threadId;
+      gmailMessageId = sent.messageId;
       recordAction({
         type: "gmail.message.send",
         status: "success",
-        details: { to: toList, cc: ccList, subject, sso_type: CANONICAL_SSO_TYPE, template: templateFile },
+        details: {
+          to: toList, cc: ccList, subject,
+          sso_type: CANONICAL_SSO_TYPE, template: templateFile,
+          gmail_thread_id: gmailThreadId, gmail_message_id: gmailMessageId,
+        },
       });
     } catch (err) {
       recordAction({
@@ -404,6 +415,8 @@ async function main() {
       email_sent_at: dryRun ? null : emailSentAt,
       template: templateFile,
       sso_type_ticket: ticketSsoType,
+      gmail_thread_id: gmailThreadId,
+      gmail_message_id: gmailMessageId,
       ...(reason ? { reason } : {}),
     },
     forge: {
@@ -586,13 +599,43 @@ function buildCommentBody({ to, cc, dryRun }) {
   const verb = dryRun ? "would send" : "sent";
   lines.push(`${actor} ${verb} Google Workspace SSO setup email to ${to.join(", ")}${cc.length ? ` (cc ${cc.join(", ")})` : ""}.`);
   lines.push("");
-  lines.push(`${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${new Date().toISOString()} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}`);
+  lines.push(`${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${new Date().toISOString()} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}${gmailThreadId ? ` gmail_thread_id=${gmailThreadId}` : ""}${gmailMessageId ? ` gmail_message_id=${gmailMessageId}` : ""}`);
   return lines.join("\n");
 }
 
 // ==========================================================================
 // Gmail (gws CLI)
 // ==========================================================================
+
+
+/**
+ * gws wraps its JSON in a keyring preamble and sometimes a trailing `Tip:`
+ * line, so JSON.parse on the raw stdout fails with "Unexpected token". Slice
+ * from the first `{` to the last `}`.
+ *
+ * Returns { messageId, threadId }. Gmail's threadId is the durable join key
+ * between a ticket and every message in its conversation — including replies
+ * from addresses that are not the ticket's pocEmail. Persisting it is what
+ * lets the inbound matcher do an exact lookup instead of guessing by domain.
+ * Never throw from here: the email is already sent by the time we parse, so a
+ * parse failure must degrade to nulls, not lose the send.
+ */
+function parseGwsSendResult(stdout) {
+  try {
+    const s = String(stdout || "");
+    const a = s.indexOf("{");
+    const b = s.lastIndexOf("}");
+    if (a === -1 || b <= a) return { messageId: null, threadId: null };
+    const o = JSON.parse(s.slice(a, b + 1));
+    // Gmail can exit 0 and still hand back an error-shaped body. Treating that
+    // as "sent, ids unknown" would record a success for a message that never
+    // left, so surface it instead of degrading.
+    if (o && o.error) return { messageId: null, threadId: null, error: o.error };
+    return { messageId: o.id || null, threadId: o.threadId || null };
+  } catch {
+    return { messageId: null, threadId: null };
+  }
+}
 
 async function gmailSend({ to, cc, subject, htmlBody }) {
   const from = process.env.GMAIL_FROM || "Edith <edith@edlio.com>";
@@ -610,7 +653,11 @@ async function gmailSend({ to, cc, subject, htmlBody }) {
   if (r.status !== 0) {
     throw new Error(`gws gmail send failed: ${r.stderr || r.stdout}`);
   }
-  return r.stdout.trim();
+  const parsed = parseGwsSendResult(r.stdout);
+  if (parsed.error) {
+    throw new Error(`gws gmail send returned an error body: ${JSON.stringify(parsed.error)}`);
+  }
+  return parsed;
 }
 
 // ==========================================================================

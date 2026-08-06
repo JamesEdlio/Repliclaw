@@ -28,7 +28,7 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.3";
+const SKILL_VERSION = "0.3.4";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
@@ -99,6 +99,11 @@ const dryRun = inputs.dry_run === true;
 const triggeredBy = typeof inputs.triggered_by === "string" && inputs.triggered_by
   ? inputs.triggered_by
   : null;
+
+// Gmail identifiers for the message we send, captured at send time. Module
+// scope because the marker line folds them in.
+let gmailThreadId = null;
+let gmailMessageId = null;
 
 const ctx = {
   runId,
@@ -442,21 +447,27 @@ async function main() {
       },
     });
   } else {
-    await gmailSend({
+    const sent = await gmailSend({
       to,
       cc,
       subject: emailSubject,
       htmlBody: emailBody,
     });
+    gmailThreadId = sent.threadId;
+    gmailMessageId = sent.messageId;
     recordAction({
       type: "gmail.message.send",
       status: "success",
-      details: { to, cc, subject: emailSubject, extra_instructions_included: Boolean((ctx.extraInstructions || "").trim()) },
+      details: {
+        to, cc, subject: emailSubject,
+        extra_instructions_included: Boolean((ctx.extraInstructions || "").trim()),
+        gmail_thread_id: gmailThreadId, gmail_message_id: gmailMessageId,
+      },
     });
   }
 
   // Step 8: POST Forge comment with marker
-  const markerLine = `${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${sentAt} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}`;
+  const markerLine = `${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${sentAt} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}${gmailThreadId ? ` gmail_thread_id=${gmailThreadId}` : ""}${gmailMessageId ? ` gmail_message_id=${gmailMessageId}` : ""}`;
   const attribution = triggeredBy
     ? `${triggeredBy} (via Edith) sent the SFTP setup email.`
     : `Edith sent the SFTP setup email.`;
@@ -547,6 +558,8 @@ async function main() {
       op_item_id: opMeta.item_id,
       op_share_url: opMeta.share_url,
       op_share_expires_at: opMeta.share_expires_at,
+      gmail_thread_id: gmailThreadId,
+      gmail_message_id: gmailMessageId,
     },
     forge: {
       comment_posted: !dryRun,
@@ -987,6 +1000,35 @@ async function opItemShare({ itemId, emails, expiresIn }) {
 // Gmail send (via gws CLI — shared fleet OAuth client)
 // ==========================================================================
 
+/**
+ * gws wraps its JSON in a keyring preamble and sometimes a trailing `Tip:`
+ * line, so JSON.parse on the raw stdout fails with "Unexpected token". Slice
+ * from the first `{` to the last `}`.
+ *
+ * Returns { messageId, threadId }. Gmail's threadId is the durable join key
+ * between a ticket and every message in its conversation — including replies
+ * from addresses that are not the ticket's pocEmail. Persisting it is what
+ * lets the inbound matcher do an exact lookup instead of guessing by domain.
+ * Never throw from here: the email is already sent by the time we parse, so a
+ * parse failure must degrade to nulls, not lose the send.
+ */
+function parseGwsSendResult(stdout) {
+  try {
+    const s = String(stdout || "");
+    const a = s.indexOf("{");
+    const b = s.lastIndexOf("}");
+    if (a === -1 || b <= a) return { messageId: null, threadId: null };
+    const o = JSON.parse(s.slice(a, b + 1));
+    // Gmail can exit 0 and still hand back an error-shaped body. Treating that
+    // as "sent, ids unknown" would record a success for a message that never
+    // left, so surface it instead of degrading.
+    if (o && o.error) return { messageId: null, threadId: null, error: o.error };
+    return { messageId: o.id || null, threadId: o.threadId || null };
+  } catch {
+    return { messageId: null, threadId: null };
+  }
+}
+
 async function gmailSend({ to, cc, subject, htmlBody }) {
   const from = process.env.GMAIL_FROM || "Edith <edith@edlio.com>";
   const args = [
@@ -1003,7 +1045,11 @@ async function gmailSend({ to, cc, subject, htmlBody }) {
   if (r.status !== 0) {
     throw new Error(`gws gmail send failed: ${r.stderr || r.stdout}`);
   }
-  return r.stdout.trim();
+  const parsed = parseGwsSendResult(r.stdout);
+  if (parsed.error) {
+    throw new Error(`gws gmail send returned an error body: ${JSON.stringify(parsed.error)}`);
+  }
+  return parsed;
 }
 
 // ==========================================================================

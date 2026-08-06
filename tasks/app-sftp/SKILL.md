@@ -1,6 +1,6 @@
 ---
 name: app-sftp
-version: 0.3.3
+version: 0.3.4
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -302,6 +302,27 @@ Comment body format:
 ```
 
 The marker line must be present verbatim — Step 2 relies on it.
+
+### Gmail thread id (inbound reply matching)
+
+On a successful send the task captures Gmail's `id` and `threadId` from the send
+response and records them in three places:
+
+- the `gmail.message.send` action details,
+- `data.outreach.gmail_thread_id` / `gmail_message_id`,
+- the marker comment line, as `gmail_thread_id=<id> gmail_message_id=<id>`.
+
+`threadId` is the durable join key between a ticket and every message in its
+conversation, **including replies from addresses that are not the ticket's
+`pocEmail`**. Persisting it lets the inbound matcher do an exact lookup instead
+of guessing from subject text or sender domain. It does not help with a *fresh*
+thread started from an unknown address — that still needs a separate rule.
+
+Parsing degrades to `null` rather than throwing: by the time we read the
+response the mail has already left, so a parse failure must not fail the run.
+An error-shaped body (Gmail can exit 0 and still return `{"error":...}`) is the
+one exception — that means the send did **not** happen and is raised.
+
 
 Record `forge.comment.create` (status `success`, `details.comment_id`, `details.ticket_key`).
 

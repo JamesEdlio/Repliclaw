@@ -1,6 +1,6 @@
 ---
 name: app-sso-google
-version: 0.1.1
+version: 0.1.2
 description: Send the Google Workspace SSO setup email for a Forge ticket. Renders the Google Workspace SSO setup guide email, sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira. Modeled on app-api with the provider dimension collapsed to the single SSO type this skill handles.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -151,3 +151,24 @@ This skill follows the app-api conventions. Bump the `version` field in
 frontmatter and the `SKILL_VERSION` constant in `run.mjs` together. The
 audit marker includes `skill_version=` so the dup-send guard can reason
 about prior runs from older versions.
+
+
+### Gmail thread id (inbound reply matching)
+
+On a successful send the task captures Gmail's `id` and `threadId` from the send
+response and records them in three places:
+
+- the `gmail.message.send` action details,
+- `data.outreach.gmail_thread_id` / `gmail_message_id`,
+- the marker comment line, as `gmail_thread_id=<id> gmail_message_id=<id>`.
+
+`threadId` is the durable join key between a ticket and every message in its
+conversation, **including replies from addresses that are not the ticket's
+`pocEmail`**. Persisting it lets the inbound matcher do an exact lookup instead
+of guessing from subject text or sender domain. It does not help with a *fresh*
+thread started from an unknown address — that still needs a separate rule.
+
+Parsing degrades to `null` rather than throwing: by the time we read the
+response the mail has already left, so a parse failure must not fail the run.
+An error-shaped body (Gmail can exit 0 and still return `{"error":...}`) is the
+one exception — that means the send did **not** happen and is raised.

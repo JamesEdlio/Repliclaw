@@ -93,6 +93,14 @@
         "op_share_expires_at": {
           "type": ["string", "null"],
           "format": "date-time"
+        },
+        "gmail_thread_id": {
+          "type": ["string", "null"],
+          "description": "Gmail threadId of the sent message. Join key for inbound reply matching."
+        },
+        "gmail_message_id": {
+          "type": ["string", "null"],
+          "description": "Gmail message id of the sent message."
         }
       }
     },

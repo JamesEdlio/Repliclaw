@@ -1,6 +1,6 @@
 ---
 name: first-contact
-version: 0.2.0
+version: 0.2.1
 description: Send the Data Integrations first-contact acknowledgement for a Forge ticket, from di@edlio.com with Reply-To dataintegrations@edlio.com. Edith-native replacement for Diana's `bard` skill. Acknowledgement only — tells the client we received their request and a human will follow up. Does NOT provision credentials or send setup instructions. Works across all products and integration types (App / CMS / Pay).
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -213,3 +213,24 @@ Initial release. Ports Diana's `bard` first-contact behaviour: verbatim
 template and subject shape captured from `di@`'s Sent folder, raw-MIME send
 for the `Reply-To` header, comment-marker idempotency replacing Ranger's
 watermark files, and a new downstream-marker guard Bard did not have.
+
+
+### Gmail thread id (inbound reply matching)
+
+On a successful send the task captures Gmail's `id` and `threadId` from the send
+response and records them in three places:
+
+- the `gmail.message.send` action details,
+- `data.outreach.gmail_thread_id` / `gmail_message_id`,
+- the marker comment line, as `gmail_thread_id=<id> gmail_message_id=<id>`.
+
+`threadId` is the durable join key between a ticket and every message in its
+conversation, **including replies from addresses that are not the ticket's
+`pocEmail`**. Persisting it lets the inbound matcher do an exact lookup instead
+of guessing from subject text or sender domain. It does not help with a *fresh*
+thread started from an unknown address — that still needs a separate rule.
+
+Parsing degrades to `null` rather than throwing: by the time we read the
+response the mail has already left, so a parse failure must not fail the run.
+An error-shaped body (Gmail can exit 0 and still return `{"error":...}`) is the
+one exception — that means the send did **not** happen and is raised.

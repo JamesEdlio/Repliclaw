@@ -1,6 +1,6 @@
 ---
 name: app-api
-version: 0.1.4
+version: 0.1.5
 description: Send the App-API setup email for a Forge ticket. Provider-aware — renders the right setup-guide email per API provider (PowerSchool, Clever, Aeries, Sylogist, etc.), sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -127,6 +127,27 @@ Sent PowerSchool API setup email to poc@example.com (cc reporter@edlio.com).
 [app-api] setup-sent run_id=<runId> ts=<iso> skill_version=0.1.0
 ```
 The marker line is what Step 3 greps for on the next run.
+
+### Gmail thread id (inbound reply matching)
+
+On a successful send the task captures Gmail's `id` and `threadId` from the send
+response and records them in three places:
+
+- the `gmail.message.send` action details,
+- `data.outreach.gmail_thread_id` / `gmail_message_id`,
+- the marker comment line, as `gmail_thread_id=<id> gmail_message_id=<id>`.
+
+`threadId` is the durable join key between a ticket and every message in its
+conversation, **including replies from addresses that are not the ticket's
+`pocEmail`**. Persisting it lets the inbound matcher do an exact lookup instead
+of guessing from subject text or sender domain. It does not help with a *fresh*
+thread started from an unknown address — that still needs a separate rule.
+
+Parsing degrades to `null` rather than throwing: by the time we read the
+response the mail has already left, so a parse failure must not fail the run.
+An error-shaped body (Gmail can exit 0 and still return `{"error":...}`) is the
+one exception — that means the send did **not** happen and is raised.
+
 
 ### Step 8 — Transition BACKLOG → INITIAL_CONTACT
 Only if `ticket.status == "BACKLOG"`. Any other starting status is left alone (we don't re-transition).

@@ -79,6 +79,14 @@
         "reason": {
           "type": ["string", "null"],
           "description": "Short machine-readable reason tag when email was not sent (e.g. missing_poc_email, provider_not_supported, already_sent)."
+        },
+        "gmail_thread_id": {
+          "type": ["string", "null"],
+          "description": "Gmail threadId of the sent message. Join key for inbound reply matching."
+        },
+        "gmail_message_id": {
+          "type": ["string", "null"],
+          "description": "Gmail message id of the sent message."
         }
       }
     },

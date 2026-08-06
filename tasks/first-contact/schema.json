@@ -45,6 +45,14 @@
         "greeting_name": {
           "type": ["string", "null"],
           "description": "POC name used in the greeting line. Null means the bare 'Hello,' fallback was used."
+        },
+        "gmail_thread_id": {
+          "type": ["string", "null"],
+          "description": "Gmail threadId of the sent message. Join key for inbound reply matching."
+        },
+        "gmail_message_id": {
+          "type": ["string", "null"],
+          "description": "Gmail message id of the sent message."
         }
       }
     },
