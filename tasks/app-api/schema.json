@@ -80,7 +80,7 @@
           "type": ["string", "null"],
           "description": "Short machine-readable reason tag when email was not sent (e.g. missing_poc_email, provider_not_supported, already_sent)."
         },
-        "gmail_thread_id": {
+        "extra_instructions_included": {"type": "boolean", "description": "True when an operator-supplied extra_instructions note was rendered into the email body."}, "gmail_thread_id": {
           "type": ["string", "null"],
           "description": "Gmail threadId of the sent message. Join key for inbound reply matching."
         },

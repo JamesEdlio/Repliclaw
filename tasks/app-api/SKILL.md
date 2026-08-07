@@ -1,6 +1,6 @@
 ---
 name: app-api
-version: 0.1.5
+version: 0.2.0
 description: Send the App-API setup email for a Forge ticket. Provider-aware — renders the right setup-guide email per API provider (PowerSchool, Clever, Aeries, Sylogist, etc.), sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -32,6 +32,23 @@ inputs:
     type: boolean
     required: false
     description: If true, bypass the dup-send guard and send the setup email even if a prior [app-api] setup-sent marker is found in ticket comments. Use with care.
+  extra_instructions:
+    type: string
+    required: false
+    description: |
+      Optional free-text note rendered as its own paragraph in the setup email.
+      HTML-escaped; newlines become line breaks. Blank/absent leaves the email
+      byte-identical to before.
+
+      Placement differs from app-sftp on purpose. app-sftp puts the note *after*
+      the connection details (the credentials are the payload; the note is a
+      rider). app-api's payload is a *request* to the client, so the note goes
+      immediately after the opening line — the dominant use is context that has
+      to land before the ask ("apologies for the delay following up here",
+      "further to our call Tuesday").
+
+      If a template somehow lacks the {extra_instructions_block} anchor, the run
+      throws rather than sending a mail that silently drops the note.
 outputs:
   status:
     type: string

@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.1.5";
+const SKILL_VERSION = "0.2.0";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
@@ -177,6 +177,10 @@ const ctx = {
   triggeredBy,
   forceRerun: inputs.force_rerun === true,
   providerOverride: inputs.provider || null,
+  extraInstructions:
+    typeof inputs.extra_instructions === "string"
+      ? inputs.extra_instructions
+      : "",
   actions: [],
   notes: [],
   errors: [],
@@ -311,6 +315,18 @@ async function main() {
   // Step 5: render template
   const templateVars = buildTemplateVars(ticket, providerMeta);
   const htmlBody = renderEmailTemplate(providerMeta.templateFile, templateVars);
+
+  // Fail closed: if the operator supplied a note but the template had no
+  // {extra_instructions_block} anchor, the note is silently dropped and the
+  // run still reports success. That is the worst outcome (operator believes
+  // it was said; client never saw it), so refuse to send instead.
+  const extraBlock = templateVars.extra_instructions_block;
+  if (extraBlock && !htmlBody.includes(extraBlock)) {
+    throw new Error(
+      `extra_instructions supplied but template ${providerMeta.templateFile} has no ` +
+        `{extra_instructions_block} placeholder — refusing to send a mail that drops it`
+    );
+  }
   const subject = `${ticket.schoolName || ctx.ticketKey} — ${providerMeta.displayName} API setup`;
 
   // Step 6: send email
@@ -325,6 +341,7 @@ async function main() {
         subject,
         provider: providerKey,
         template: providerMeta.templateFile,
+        extra_instructions_included: Boolean(extraBlock),
       },
     });
   } else {
@@ -335,7 +352,14 @@ async function main() {
       recordAction({
         type: "gmail.message.send",
         status: "success",
-        details: { to: toList, cc: ccList, subject, provider: providerKey, template: providerMeta.templateFile },
+        details: {
+          to: toList,
+          cc: ccList,
+          subject,
+          provider: providerKey,
+          template: providerMeta.templateFile,
+          extra_instructions_included: Boolean(extraBlock),
+        },
       });
     } catch (err) {
       recordAction({
@@ -469,6 +493,7 @@ async function main() {
       email_subject: subject,
       email_sent_at: dryRun ? null : emailSentAt,
       template: providerMeta.templateFile,
+      extra_instructions_included: Boolean(extraBlock),
       gmail_thread_id: gmailThreadId,
       gmail_message_id: gmailMessageId,
       ...(reason ? { reason } : {}),
@@ -660,6 +685,7 @@ function resolveRecipients(ticket) {
 
 function buildTemplateVars(ticket, providerMeta) {
   return {
+    extra_instructions_block: buildExtraInstructionsBlock(ctx.extraInstructions),
     poc_first_name: derivePocFirstName(ticket),
     reporter_intro: buildReporterIntro(ticket),
     dashboard_display: DASHBOARD_DISPLAY[ticket.dashboard] || "Edlio",
@@ -714,6 +740,24 @@ function buildReporterIntro(ticket) {
     return `<strong>${name}</strong> asked me to reach out to you about`;
   }
   return "You've asked us to reach out about";
+}
+
+// Operator free-text, injected as its own paragraph right after the intro
+// line. Blank/absent => empty string => email is byte-identical to before.
+function buildExtraInstructionsBlock(raw) {
+  const text = (raw || "").trim();
+  if (!text) return "";
+  const html = escapeHtml(text).replaceAll("\n", "<br>");
+  return `<p>${html}</p>`;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function renderEmailTemplate(templateFile, vars) {
