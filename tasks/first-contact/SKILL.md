@@ -1,6 +1,6 @@
 ---
 name: first-contact
-version: 0.2.1
+version: 0.2.2
 description: Send the Data Integrations first-contact acknowledgement for a Forge ticket, from di@edlio.com with Reply-To dataintegrations@edlio.com. Edith-native replacement for Diana's `bard` skill. Acknowledgement only — tells the client we received their request and a human will follow up. Does NOT provision credentials or send setup instructions. Works across all products and integration types (App / CMS / Pay).
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs

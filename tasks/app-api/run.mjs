@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.2.0";
+const SKILL_VERSION = "0.2.1";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
@@ -169,6 +169,16 @@ const triggeredBy = typeof inputs.triggered_by === "string" && inputs.triggered_
 // scope because the marker line folds them in.
 let gmailThreadId = null;
 let gmailMessageId = null;
+// Gmail ids are mailbox-scoped (see fetchRfc822MessageId). Record BOTH which
+// mailbox they belong to and the globally-unique RFC822 Message-ID.
+// The mailbox the send actually left from. Persisted alongside the ids because
+// Gmail ids are mailbox-scoped (see fetchRfc822MessageId) — a consumer sweeping a
+// different mailbox needs to know which mailbox a persisted id belongs to.
+// Derived from GMAIL_FROM rather than hardcoded so it cannot drift from the
+// address gmailSend() actually uses.
+const GMAIL_MAILBOX = (/<([^>]+)>/.exec(process.env.GMAIL_FROM || "")?.[1]
+  || process.env.GMAIL_FROM || "edith@edlio.com").trim();
+let gmailRfc822Id = null;
 
 const ctx = {
   runId,
@@ -349,6 +359,7 @@ async function main() {
       const sent = await gmailSend({ to: toList, cc: ccList, subject, htmlBody });
       gmailThreadId = sent.threadId;
       gmailMessageId = sent.messageId;
+      gmailRfc822Id = fetchRfc822MessageId(gmailMessageId);
       recordAction({
         type: "gmail.message.send",
         status: "success",
@@ -496,6 +507,8 @@ async function main() {
       extra_instructions_included: Boolean(extraBlock),
       gmail_thread_id: gmailThreadId,
       gmail_message_id: gmailMessageId,
+      gmail_mailbox: GMAIL_MAILBOX,
+      rfc822_message_id: gmailRfc822Id,
       ...(reason ? { reason } : {}),
     },
     forge: {
@@ -779,7 +792,7 @@ function buildCommentBody({ providerDisplay, to, cc, dryRun }) {
   const verb = dryRun ? "would send" : "sent";
   lines.push(`${actor} ${verb} ${providerDisplay} API setup email to ${to.join(", ")}${cc.length ? ` (cc ${cc.join(", ")})` : ""}.`);
   lines.push("");
-  lines.push(`${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${new Date().toISOString()} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}${gmailThreadId ? ` gmail_thread_id=${gmailThreadId}` : ""}${gmailMessageId ? ` gmail_message_id=${gmailMessageId}` : ""}`);
+  lines.push(`${MARKER_TAG} ${MARKER_EVENT} run_id=${ctx.runId} ts=${new Date().toISOString()} skill_version=${SKILL_VERSION}${triggeredBy ? ` triggered_by=${triggeredBy}` : ""}${gmailThreadId ? ` gmail_thread_id=${gmailThreadId}` : ""}${gmailMessageId ? ` gmail_message_id=${gmailMessageId}` : ""}${gmailThreadId || gmailMessageId ? ` gmail_mailbox=${GMAIL_MAILBOX}` : ""}${gmailRfc822Id ? ` rfc822_message_id=${gmailRfc822Id}` : ""}`);
   return lines.join("\n");
 }
 
@@ -813,6 +826,56 @@ function parseGwsSendResult(stdout) {
     return { messageId: o.id || null, threadId: o.threadId || null };
   } catch {
     return { messageId: null, threadId: null };
+  }
+}
+
+/**
+ * Fetch the RFC822 Message-ID of a message we just sent.
+ *
+ * WHY: Gmail's `threadId` (and `id`) are MAILBOX-SCOPED. Verified 2026-08-07 —
+ * the identical conversation, same RFC822 Message-IDs, carries different
+ * threadIds in edith@ and di@:
+ *     edith@  thread=19faa8392042b8ed
+ *     di@     thread=19faa83a14d8bdbf
+ * So a threadId persisted from THIS mailbox's send cannot be matched against an
+ * inbound message seen in the OTHER mailbox — which is exactly what the inbound
+ * consumer does (it sweeps di@, while app-* setup mail is sent from edith@).
+ * The RFC822 Message-ID is globally unique and mailbox/provider independent, so
+ * it is the join key that actually works: inbound In-Reply-To / References
+ * point at it.
+ *
+ * Fails SOFT and returns null. The mail has already been sent by the time this
+ * runs; throwing here would report a failure for a message the client received.
+ */
+function fetchRfc822MessageId(gmailId) {
+  if (!gmailId) return null;
+  try {
+    const params = JSON.stringify({
+      userId: "me",
+      id: gmailId,
+      format: "metadata",
+      metadataHeaders: ["Message-ID"],
+    });
+    const r = spawnSync("gws", ["gmail", "users", "messages", "get", "--params", params], {
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    if (r.status !== 0) return null;
+    const s = String(r.stdout || "");
+    const a = s.indexOf("{");
+    const b = s.lastIndexOf("}");
+    if (a === -1 || b <= a) return null;
+    const o = JSON.parse(s.slice(a, b + 1));
+    if (o.error) return null;
+    const h = (o.payload?.headers || []).find((x) => x.name.toLowerCase() === "message-id");
+    // Store the BARE id (no angle brackets). Verified 2026-08-07: Gmail returns
+    // the header with brackets, `<CAMexL4Z...@mail.gmail.com>`, but (a) DSN
+    // parsing already normalises to bare, and (b) a `<...>` inside a marker line
+    // in a Forge comment body risks being eaten as an HTML tag on render. Bare
+    // form is the only representation both producer and consumer agree on.
+    return h ? h.value.trim().replace(/^</, "").replace(/>$/, "") : null;
+  } catch {
+    return null;
   }
 }
 

@@ -172,6 +172,20 @@
             "null"
           ],
           "description": "Gmail message id of the sent message."
+        },
+        "gmail_mailbox": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Mailbox that sent the message. Gmail thread/message ids are mailbox-scoped and are only valid within it."
+        },
+        "rfc822_message_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Globally unique RFC822 Message-ID. Mailbox- and provider-independent join key for inbound In-Reply-To/References."
         }
       }
     },
