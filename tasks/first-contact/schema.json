@@ -64,6 +64,21 @@
       ],
       "description": "Timestamp of the pre-existing marker comment, when status is already_sent."
     },
+    "live_thread": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "description": "Set when the live-thread guard declined: the most recent inbound client message found for this POC. Sender is resolved via X-Original-Sender, so group-relayed client mail is attributed correctly.",
+      "properties": {
+        "at": { "type": "string", "description": "ISO timestamp of the client's message." },
+        "from": { "type": "string", "description": "Resolved client sender address." },
+        "mailbox": { "type": "string", "description": "Which mailbox it was found in (di@ or edith@)." },
+        "subject": { "type": "string" },
+        "ts": { "type": "number", "description": "Epoch ms, used only for picking the newest." }
+      }
+    },
     "outreach": {
       "type": [
         "object",

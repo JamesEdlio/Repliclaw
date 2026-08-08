@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.2.2";
+const SKILL_VERSION = "0.3.0";
 const TASK_NAME = "first-contact";
 
 const FROM_ADDRESS = "di@edlio.com";
@@ -44,6 +44,20 @@ const FETCH_WRITE_TIMEOUT_MS = 60_000;
 // exactly one credential set per HOME, so we must not use Edith's own HOME
 // or we'd send as edith@edlio.com.
 const GWS_DI_HOME = process.env.GWS_DI_HOME || "/home/edith/gws-di";
+
+// Edith's own mailbox. Client replies land in BOTH places depending on which
+// address they answer: di@ receives the dataintegrations@ group feed, edith@
+// receives direct replies to my skills' own sends. Checking one mailbox only
+// is how a live conversation goes unnoticed.
+//
+// Both homes are explicit on purpose: gws keeps exactly one credential set per
+// HOME, and under repliclaw HOME is the replica workspace, so inheriting it
+// silently authenticates as nobody.
+const GWS_EDITH_HOME = process.env.GWS_EDITH_HOME || "/home/edith";
+
+// How far back an inbound client message still counts as "a conversation is
+// underway". Longer = more declines, all of them visible to a human.
+const LIVE_THREAD_WINDOW_DAYS = Number(process.env.LIVE_THREAD_WINDOW_DAYS || 60);
 
 // integrationType -> the {TYPE} token Bard puts in subject + body.
 const TYPE_TOKENS = {
@@ -267,6 +281,41 @@ async function main() {
 
   const to = [pocEmail];
   const cc = [DATA_INTEGRATIONS_CC];
+
+  // --- 4b. Live-thread guard ---------------------------------------------
+  // Last line of defence, and the only one that asks whether an ack is
+  // *appropriate* rather than whether one already went out. Fail closed: an
+  // unverifiable mailbox cannot rule out a live conversation, and a delayed ack
+  // is cheaper than one that lands mid-thread.
+  if (inputs.force_rerun !== true) {
+    let live = null;
+    try {
+      live = findLiveClientThread(pocEmail);
+    } catch (err) {
+      recordError("bardfc.livethread", err);
+      recordNote(
+        "could not search the mailboxes for an existing client conversation; refusing to send",
+        "guardrail",
+        "error"
+      );
+      return done({ status: "error", ticket_key: ticketKey, reason: "live-thread check failed" });
+    }
+    if (live) {
+      recordNote(
+        `inbound client mail from ${live.from} on ${live.at} (${live.mailbox}) — a conversation is ` +
+          `already underway, so a generic receipt would read as broken; needs human framing`,
+        "guardrail",
+        "warn"
+      );
+      return done({
+        status: "declined",
+        ticket_key: ticketKey,
+        reason: `live client thread with ${pocEmail} (last inbound ${live.at}) — needs human framing`,
+        live_thread: live,
+      });
+    }
+  }
+
   // Forge returns the reporter as a nested object; older/flatter shapes are
   // tolerated so this keeps working if the API response is ever trimmed.
   const reporterEmail = String(
@@ -644,6 +693,131 @@ function findSentAck(ticketKey) {
     return Number.isFinite(internal) ? new Date(internal).toISOString() : "unknown";
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Live-thread guard
+//
+// The idempotency guards above answer "has an ack already gone out?". They
+// cannot answer "should one go out at all?". A client already mid-conversation
+// with a human who then receives "we have received your request" reads it as
+// the system being broken — verified 8/8: INT-019 (client emailed that morning)
+// and INT-033 (thread live since June) both survived every existing guard.
+//
+// Header handling below is lifted verbatim from scripts/verify-contact-mailbox.mjs
+// and matters more than it looks:
+//
+//   * Google Groups REWRITES From: for external posters. A client reply relayed
+//     through dataintegrations@ arrives looking like internal @edlio.com mail,
+//     with the real sender only in X-Original-Sender / Reply-To. Post-cutover
+//     di@ reads the group feed, so that is MOST client replies. Any From:-only
+//     test misses them — the guard silently never fires.
+//   * Reply-To must NOT override an honest From:. Our own outbound sets
+//     Reply-To: dataintegrations@ deliberately, so preferring it unconditionally
+//     resolves every bot ack to a non-fleet @edlio.com address and reads as
+//     "a colleague wrote". That false-credit bug held 6 real tickets on 8/7.
+//   * Out-of-office responders are inbound mail that answers nothing. Counting
+//     them as a live thread suppresses outreach that is still owed (INT-074 got
+//     a "Summer Office Hours" bounce-back 3s after Bard's ack).
+// ---------------------------------------------------------------------------
+
+const INTERNAL_ADDR = /@edlio\.com/i;
+const GROUP_ADDR = /dataintegrations@edlio\.com/i;
+const AUTO_SUBJ =
+  /\b(out of office|auto(?:matic)? repl|autoreply|office hours|away from (?:my |the )?(?:office|desk)|on vacation|maternity leave|no longer with)\b/i;
+
+function headerMap(msg) {
+  const out = {};
+  for (const h of msg?.payload?.headers || []) {
+    if (h?.name) out[h.name.toLowerCase()] = h.value || "";
+  }
+  return out;
+}
+
+function effectiveFrom(h) {
+  if (h["x-original-sender"]) return h["x-original-sender"];
+  if (GROUP_ADDR.test(h.from || "") && h["reply-to"]) return h["reply-to"];
+  return h.from || "";
+}
+
+function isAutoReply(h) {
+  const as = (h["auto-submitted"] || "").toLowerCase();
+  if (as && as !== "no") return true;
+  if (h["x-autoreply"] || h["x-autorespond"]) return true;
+  return AUTO_SUBJ.test(h.subject || "");
+}
+
+function gwsJson(home, cmd, body) {
+  const r = spawnSync("gws", [...cmd.split(" "), "--params", JSON.stringify(body)], {
+    encoding: "utf-8",
+    env: { ...process.env, HOME: home, GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file" },
+  });
+  if (r.status !== 0) {
+    throw new Error(`gws ${cmd} failed (HOME=${home}): ${(r.stderr || r.stdout || "").trim()}`);
+  }
+  // gws can prepend a keyring line; take the JSON body only.
+  const raw = r.stdout || "";
+  const start = raw.search(/[[{]/);
+  if (start < 0) throw new Error(`gws ${cmd} returned non-JSON: ${raw.slice(0, 200)}`);
+  return JSON.parse(raw.slice(start));
+}
+
+/**
+ * Is there inbound client mail involving this POC inside the window?
+ *
+ * Scope note: this searches by POC ADDRESS, which is district-scoped, not
+ * ticket-scoped (a POC often owns several tickets). That is deliberate for an
+ * ack — a generic receipt lands badly mid-conversation regardless of which
+ * ticket it cites. The trade is that a genuinely-owed ack on a new ticket can
+ * be suppressed while an older thread runs; those want a human's combined
+ * note, which is the same conclusion the split-pair guard reaches.
+ *
+ * Returns the most recent client message found, or null.
+ */
+function findLiveClientThread(pocEmail) {
+  const cutoffMs = Date.now() - LIVE_THREAD_WINDOW_DAYS * 86_400_000;
+  // Forge's own notification mail mentions POCs and keys; without this every
+  // ticket looks like it has traffic.
+  const q = `"${pocEmail}" -subject:[Forge] newer_than:${LIVE_THREAD_WINDOW_DAYS}d`;
+  let newest = null;
+
+  for (const mb of [
+    { label: "di@", home: GWS_DI_HOME },
+    { label: "edith@", home: GWS_EDITH_HOME },
+  ]) {
+    const list = gwsJson(mb.home, "gmail users messages list", {
+      userId: "me",
+      q,
+      maxResults: 20,
+    });
+    for (const m of list.messages || []) {
+      const msg = gwsJson(mb.home, "gmail users messages get", {
+        userId: "me",
+        id: m.id,
+        format: "metadata",
+        metadataHeaders: [
+          "From",
+          "Reply-To",
+          "X-Original-Sender",
+          "Auto-Submitted",
+          "X-Autoreply",
+          "X-Autorespond",
+          "Subject",
+          "Date",
+        ],
+      });
+      const h = headerMap(msg);
+      const from = effectiveFrom(h);
+      if (!from || INTERNAL_ADDR.test(from)) continue; // us, not the client
+      if (isAutoReply(h)) continue; // answers nothing
+      const ts = Number(msg.internalDate);
+      if (!Number.isFinite(ts) || ts < cutoffMs) continue;
+      if (!newest || ts > newest.ts) {
+        newest = { ts, mailbox: mb.label, from, subject: h.subject || "", at: new Date(ts).toISOString() };
+      }
+    }
+  }
+  return newest;
 }
 
 function buildMime({ to, cc, subject, textBody }) {

@@ -1,6 +1,6 @@
 ---
 name: first-contact
-version: 0.2.2
+version: 0.3.0
 description: Send the Data Integrations first-contact acknowledgement for a Forge ticket, from di@edlio.com with Reply-To dataintegrations@edlio.com. Edith-native replacement for Diana's `bard` skill. Acknowledgement only — tells the client we received their request and a human will follow up. Does NOT provision credentials or send setup instructions. Works across all products and integration types (App / CMS / Pay).
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -150,6 +150,11 @@ The task declines rather than sends when:
    acked, **all** were `NEW_INTEGRATION` and **none** were `ISSUE`.
    `liveStatus` is *not* the discriminator — Bard acked LIVE
    `NEW_INTEGRATION` tickets (INT-080/082/087).
+6. **Prior ack in `di@`'s Sent folder** — Bard tracked state in watermark
+   files, so ~25 tickets it acked carry no Forge marker and look eligible.
+   The Sent folder is the mailbox of record for both senders → `already_sent`.
+7. **A client conversation is already underway** → `declined` with
+   `live_thread` populated. See below.
 
 Comment-read failure is **fail-closed**: if we can't verify the marker, we do
 not send, because the downside of a duplicate client email is worse than the
@@ -157,6 +162,49 @@ downside of a delayed one.
 
 `force_rerun: true` bypasses guards 1 and 2. It exists for operator recovery
 after a partial run, not for routine use.
+
+### The live-thread guard (7)
+
+Guards 1, 2 and 6 all answer *"has an ack already gone out?"*. None of them
+answers *"should one go out at all?"* — and that is a different question.
+
+Verified 8/8 by dry-running all 31 pre-filter candidates: **INT-019** (the
+client had emailed that same morning) and **INT-033** (thread live since June)
+survived every guard above. Both would have received "we have received your
+request" in the middle of an active conversation, which reads as the system
+being broken.
+
+So before sending, both mailboxes are searched for inbound client mail
+involving the POC within `LIVE_THREAD_WINDOW_DAYS` (default 60). If any is
+found, the task declines and reports the newest message in `live_thread`.
+
+Three details in the header handling are load-bearing, each learned from a bug:
+
+* **Google Groups rewrites `From:` for external posters.** A client reply
+  relayed through `dataintegrations@` arrives looking like internal
+  `@edlio.com` mail, with the real sender only in `X-Original-Sender` /
+  `Reply-To`. `di@` reads the group feed, so that is *most* client replies —
+  a `From:`-only test never fires. (INT-019's decline resolves correctly to
+  `Stacy.Bennett@k12.sd.us` precisely because of this.)
+* **`Reply-To` must not override an honest `From:`.** Our own outbound sets
+  `Reply-To: dataintegrations@` deliberately. Preferring it unconditionally
+  resolves every bot ack to a non-fleet `@edlio.com` address and reads as
+  "a colleague already wrote" — the false-credit bug that held 6 real tickets
+  on 8/7. `X-Original-Sender` is authoritative; `Reply-To` is consulted only
+  when `From:` *is* the group address.
+* **Out-of-office responders don't count.** They are inbound mail that answers
+  nothing; treating them as a live thread suppresses outreach that is still
+  owed (INT-074 got a "Summer Office Hours" bounce-back 3s after Bard's ack).
+
+**Scope caveat:** the search is by POC *address*, so it is district-scoped, not
+ticket-scoped — a POC often owns several tickets. That is deliberate for an
+ack, which lands badly mid-conversation regardless of which ticket it cites.
+The cost is that a genuinely-owed ack on a *new* ticket can be suppressed while
+an older thread runs; those want a human's combined note, which is where the
+split-pair guard in `scan-first-contact.mjs` lands too.
+
+Mailbox-search failure is **fail-closed** (`error`, no send): an unverifiable
+mailbox cannot rule out a live conversation.
 
 ## Idempotency
 
@@ -183,7 +231,7 @@ before re-running.
 | `ok` | `ok` | email sent, marker posted |
 | `partial` | `partial` | email sent, marker failed — see warning above |
 | `already_sent` | `ok` | no-op, prior marker found |
-| `declined` | `declined` | guardrail refused (setup already sent / unknown type) |
+| `declined` | `declined` | guardrail refused (setup already sent / unknown type / live client thread) |
 | `needs_input` | `needs-input` | missing `pocEmail` |
 | `error` | `error` | ticket unreadable, send failed, or unhandled |
 
@@ -194,10 +242,26 @@ before re-running.
 | `FORGE_URL` / `FORGE_BASE_URL` | Forge base URL (either accepted) |
 | `FORGE_SHARED_SECRET` | service-auth for Forge API |
 | `GWS_DI_HOME` | isolated `gws` profile holding `di@edlio.com` OAuth (default `/home/edith/gws-di`) |
+| `GWS_EDITH_HOME` | `gws` profile for `edith@edlio.com`, searched by the live-thread guard (default `/home/edith`). Both homes are explicit because `gws` keeps one credential set per `HOME`, and under repliclaw `HOME` is the replica workspace |
+| `LIVE_THREAD_WINDOW_DAYS` | how far back inbound client mail still blocks an ack (default `60`) |
 
 No 1Password or FileMage access needed — this task provisions nothing.
 
 ## Changelog
+
+### 0.3.0 — 2026-08-08
+Added the **live-thread guard** (7). Dry-running the whole backlog showed the
+existing guards were structurally incomplete: they prove an ack hasn't been
+*sent*, never that one is *wanted*. INT-019 and INT-033 both passed all of them
+while their clients were mid-thread.
+
+Until now this knowledge lived only in the drivers' hold registries, so any
+direct call to the skill could still ack into a live conversation. It belongs
+in the skill.
+
+Test matrix (dry-run, 8/8): INT-019 → `declined` (client mail that morning,
+resolved through the Groups `From:` rewrite), INT-033 → `declined` (8/05),
+INT-105 / INT-119 / INT-058 → `ok`, no false declines.
 
 ### 0.2.0 — 2026-08-03
 Added the **Issue-class guard** (`kind != NEW_INTEGRATION` → `declined`).
