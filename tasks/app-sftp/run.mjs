@@ -28,11 +28,16 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.5";
+const SKILL_VERSION = "0.3.6";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
-const ONEPASSWORD_VAULT = "Agent: DI-Ana - SFTP";
+// Vault pinned by UUID, not name: the vault is still called "Agent: DI-Ana - SFTP"
+// and Diana retires ~2026-08-10. A human tidying up her name would rename it and
+// break step 6 *after* a FileMage user already exists (half-provisioned district).
+// UUIDs are immutable; ONEPASSWORD_VAULT_LABEL is for audit output only.
+const ONEPASSWORD_VAULT = "vnph2yc4elxe4eyqkzb7ye45j4";
+const ONEPASSWORD_VAULT_LABEL = "Agent: DI-Ana - SFTP";
 const SHARE_EXPIRES_IN = "7d";
 const MARKER_TAG = "[app-sftp]";
 const MARKER_EVENT = "setup-sent";
@@ -387,7 +392,7 @@ async function main() {
     recordAction({
       type: "op.item.create",
       status: "skipped",
-      details: { dry_run: true, vault: ONEPASSWORD_VAULT, title: itemTitle },
+      details: { dry_run: true, vault: ONEPASSWORD_VAULT_LABEL, vault_id: ONEPASSWORD_VAULT, title: itemTitle },
     });
     recordAction({
       type: "op.item.share",
@@ -410,7 +415,7 @@ async function main() {
       type: "op.item.create",
       status: "success",
       ref: `op:item:${item.id}`,
-      details: { vault: ONEPASSWORD_VAULT, title: itemTitle },
+      details: { vault: ONEPASSWORD_VAULT_LABEL, vault_id: ONEPASSWORD_VAULT, title: itemTitle },
     });
 
     const shareRecipients = [...to, ...cc];

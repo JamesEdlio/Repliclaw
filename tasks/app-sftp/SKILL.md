@@ -1,6 +1,6 @@
 ---
 name: app-sftp
-version: 0.3.5
+version: 0.3.6
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -63,7 +63,12 @@ Every external mutation must be recorded with `result.action()` using canonical 
 
 - **Ticket data**: Forge (`GET $FORGE_URL/api/tickets/<ticket_key>` with `x-forge-secret`). Never Jira.
 - **SFTP provisioning**: FileMage API.
-- **Credentials store**: 1Password vault `Agent: DI-Ana - SFTP` (shared between Diana and Edith).
+- **Credentials store**: 1Password vault `Agent: DI-Ana - SFTP`, addressed in code by its
+  immutable UUID `vnph2yc4elxe4eyqkzb7ye45j4` (see v0.3.6). The name still says DI-Ana and
+  Diana retires ~2026-08-10; a rename during her cleanup would otherwise break step 6
+  *after* the FileMage user exists, leaving a half-provisioned district. Access is granted
+  to Edith's own service account, so it survives Diana's deprovisioning — but the 41 live
+  client credentials in there do **not** survive vault deletion.
 - **Email channel**: Gmail API as `edith@edlio.com`, sig "Edith, Data Integrations, edith@edlio.com".
 
 ## Inputs
