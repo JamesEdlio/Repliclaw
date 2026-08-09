@@ -301,7 +301,7 @@ async function main() {
         status: "failed",
         details: { to: toList, cc: ccList, subject, sso_type: CANONICAL_SSO_TYPE, error: err.message },
       });
-      recordError("gmail.send_failed", err);
+      recordError("gmail.sendfail", err);
       return done({
         status: "error",
         ticket_key: ctx.ticketKey,
@@ -352,7 +352,7 @@ async function main() {
         status: "failed",
         details: { ticket_key: ctx.ticketKey, error: err.message },
       });
-      recordError("forge.comment_failed", err);
+      recordError("forge.commentfail", err);
       commentFailed = true;
     }
   }
@@ -388,7 +388,7 @@ async function main() {
           status: "failed",
           details: { ticket_key: ctx.ticketKey, from: "BACKLOG", to: "INITIAL_CONTACT", error: err.message },
         });
-        recordError("forge.transition_failed", err);
+        recordError("forge.transitionfail", err);
         transitionFailed = true;
       }
     }

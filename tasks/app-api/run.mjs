@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.2.1";
+const SKILL_VERSION = "0.3.0";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
@@ -139,6 +139,19 @@ const PROVIDER_REGISTRY = {
   },
 };
 
+// Opt-in template variants. Some providers have a two-step outreach: ask whether
+// the client actually controls the tenant BEFORE asking them to administer it.
+// clever_district.html shipped with the original port (v0.1.0) but was never
+// reachable — the registry maps CLEVER to clever.html only, so every Clever
+// district got the "go approve the data share" ask regardless of whether the POC
+// could. That is how SS-438 (PS 158, NYC DOE) stalled 4 months: the AP had no
+// district Clever admin role. Selecting a variant is a human judgement, so this
+// is explicit input only, never inferred.
+const TEMPLATE_VARIANTS = {
+  clever: { confirm_control: "clever_district.html" },
+};
+
+
 // Dashboard enum -> human display (for {dashboard_display} template var).
 const DASHBOARD_DISPLAY = {
   EDLIO: "Edlio",
@@ -187,6 +200,10 @@ const ctx = {
   triggeredBy,
   forceRerun: inputs.force_rerun === true,
   providerOverride: inputs.provider || null,
+  templateVariant:
+    typeof inputs.template_variant === "string" && inputs.template_variant
+      ? inputs.template_variant.trim()
+      : null,
   extraInstructions:
     typeof inputs.extra_instructions === "string"
       ? inputs.extra_instructions
@@ -250,7 +267,37 @@ async function main() {
     });
   }
   const providerKey = providerResolution.canonical;
-  const providerMeta = PROVIDER_REGISTRY[providerKey];
+  let providerMeta = PROVIDER_REGISTRY[providerKey];
+
+  // Step 2.4: optional template variant. Fail closed on an unknown name — a
+  // silent fallback to the default template is the whole failure mode this
+  // exists to prevent.
+  if (ctx.templateVariant) {
+    const available = TEMPLATE_VARIANTS[providerKey] || {};
+    const variantFile = available[ctx.templateVariant];
+    if (!variantFile) {
+      const offered = Object.keys(available);
+      recordError(
+        "appapi.badvariant",
+        new Error(
+          `template_variant="${ctx.templateVariant}" is not defined for provider ${providerKey}` +
+            (offered.length ? `; available: ${offered.join(", ")}` : "; this provider has no variants")
+        )
+      );
+      return done({
+        status: "error",
+        ticket_key: ctx.ticketKey,
+        provider: providerKey,
+        declined_reason: `unknown template_variant "${ctx.templateVariant}" for ${providerKey}`,
+      });
+    }
+    providerMeta = { ...providerMeta, templateFile: variantFile };
+    recordNote(
+      `Using template variant "${ctx.templateVariant}" -> ${variantFile} instead of the ${providerKey} default.`,
+      "observation",
+      "info"
+    );
+  }
 
   // Step 2.5: type guard
   if (ticket.product !== "APP" || ticket.integrationType !== "APP_API") {
@@ -378,7 +425,7 @@ async function main() {
         status: "failed",
         details: { to: toList, cc: ccList, subject, provider: providerKey, error: err.message },
       });
-      recordError("gmail.send_failed", err);
+      recordError("gmail.sendfail", err);
       return done({
         status: "error",
         ticket_key: ctx.ticketKey,
@@ -430,7 +477,7 @@ async function main() {
         status: "failed",
         details: { ticket_key: ctx.ticketKey, error: err.message },
       });
-      recordError("forge.comment_failed", err);
+      recordError("forge.commentfail", err);
       commentFailed = true;
     }
   }
@@ -466,7 +513,7 @@ async function main() {
           status: "failed",
           details: { ticket_key: ctx.ticketKey, from: "BACKLOG", to: "INITIAL_CONTACT", error: err.message },
         });
-        recordError("forge.transition_failed", err);
+        recordError("forge.transitionfail", err);
         transitionFailed = true;
       }
     }

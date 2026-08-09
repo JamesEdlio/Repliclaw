@@ -1,6 +1,6 @@
 ---
 name: app-api
-version: 0.2.1
+version: 0.3.0
 description: Send the App-API setup email for a Forge ticket. Provider-aware — renders the right setup-guide email per API provider (PowerSchool, Clever, Aeries, Sylogist, etc.), sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -24,6 +24,23 @@ inputs:
       (PowerSchool, Clever, Aeries, ...). Case-insensitive.
       If omitted, the skill reads `ticket.apiProvider` from Forge. If the
       ticket also has no apiProvider set, the skill emits status=needs_input.
+  template_variant:
+    type: string
+    required: false
+    description: |
+      Opt-in alternate template for the resolved provider. Currently the only
+      variant is `confirm_control` for Clever, which renders
+      `clever_district.html` — "can you confirm you have access to or control of
+      your Clever instance?" — instead of the default `clever.html`, which asks
+      the POC to go approve the data share at schools.clever.com.
+      Use it when the POC may not administer the tenant we are asking them to
+      administer. Large districts (NYC DOE, diocesan systems) own Clever and
+      Google Workspace centrally, so a school-level contact cannot complete the
+      default ask: SS-438 (PS 158) sat in INITIAL_CONTACT ~4 months on exactly
+      that wall, and INT-107 hit the Google equivalent.
+      Choosing a variant is a human judgement — it is never inferred. An
+      unrecognised value is a hard refusal (status=error, code
+      appapi.badvariant, no mail sent), never a silent fallback to the default.
   dry_run:
     type: boolean
     required: false
