@@ -1,6 +1,6 @@
 ---
 name: app-api
-version: 0.3.0
+version: 0.4.0
 description: Send the App-API setup email for a Forge ticket. Provider-aware — renders the right setup-guide email per API provider (PowerSchool, Clever, Aeries, Sylogist, etc.), sends from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions to INITIAL_CONTACT. No credentials are provisioned at this stage — step 1 of the integration is outreach only. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -41,6 +41,26 @@ inputs:
       Choosing a variant is a human judgement — it is never inferred. An
       unrecognised value is a hard refusal (status=error, code
       appapi.badvariant, no mail sent), never a silent fallback to the default.
+
+      Skyward variants (`sms`, `qmlativ`): a ticket stamped SKYWARD tells us
+      only the family, so the default `skyward_confirm.html` asks the district
+      which product they run. When a human already knows the answer, pass the
+      variant to skip a round-trip. Sending the wrong one is a real incident:
+      SS-453 (Chaminade) received the Qmlativ guide while running SMS 2.0.
+  extra_cc:
+    type: string
+    required: false
+    description: |
+      Additional CC addresses (comma/semicolon/space separated, or an array).
+      Appended after the ticket reporter/assignee and the mandatory
+      dataintegrations@ distro, and deduped against all of them plus the POC
+      and sender — so it can never displace a required recipient.
+      An invalid address is a hard refusal (status=error, code
+      appapi.badextracc, no mail sent) rather than a silent drop, because
+      quietly sending to half the intended list is the failure this prevents.
+      Use it when the client's correct address is genuinely ambiguous: SS-453
+      (Chaminade) reaches Lee Tilley on both chaminade-stl.org and the legacy
+      chaminade-stl.com, and the PM asked for both to be included.
   dry_run:
     type: boolean
     required: false

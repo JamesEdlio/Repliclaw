@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.0";
+const SKILL_VERSION = "0.4.0";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const MARKER_TAG = "[app-api]";
 const MARKER_EVENT = "setup-sent";
@@ -149,6 +149,17 @@ const PROVIDER_REGISTRY = {
 // is explicit input only, never inferred.
 const TEMPLATE_VARIANTS = {
   clever: { confirm_control: "clever_district.html" },
+  // Skyward is a two-step provider: SKYWARD alone only tells us the family,
+  // not the product. The default (skyward_confirm.html) ASKS which version.
+  // Once a human knows the answer, they skip the round-trip by dispatching
+  // with the matching variant. Both files shipped with the original port but
+  // neither was reachable (same defect class as clever_district) — sending
+  // the wrong one is a real incident (SS-453 Chaminade, Qmlativ guide to an
+  // SMS 2.0 district).
+  skyward_confirm: {
+    sms: "skyward_sms.html",
+    qmlativ: "skyward_qmlativ.html",
+  },
 };
 
 
@@ -200,6 +211,7 @@ const ctx = {
   triggeredBy,
   forceRerun: inputs.force_rerun === true,
   providerOverride: inputs.provider || null,
+  extraCc: parseExtraCc(inputs.extra_cc),
   templateVariant:
     typeof inputs.template_variant === "string" && inputs.template_variant
       ? inputs.template_variant.trim()
@@ -353,7 +365,18 @@ async function main() {
   }
 
   // Step 4: resolve recipients
-  const { toList, ccList, missingReason } = resolveRecipients(ticket);
+  const { toList, ccList, missingReason, badExtraCc } = resolveRecipients(ticket, ctx.extraCc);
+  if (badExtraCc && badExtraCc.length) {
+    recordError("appapi.badextracc", new Error(`extra_cc contained invalid address(es): ${badExtraCc.join(", ")}`));
+    return done({
+      status: "error",
+      ticket_key: ctx.ticketKey,
+      provider: providerKey,
+      provider_source: providerResolution.source,
+      declined_reason: `invalid extra_cc: ${badExtraCc.join(", ")}`,
+      note: "Refusing to send rather than silently dropping an address the operator asked for.",
+    });
+  }
   if (missingReason) {
     return done({
       status: "needs_input",
@@ -706,7 +729,16 @@ function findPriorRun(comments) {
 // Recipients
 // ==========================================================================
 
-function resolveRecipients(ticket) {
+// Operator-supplied additional CCs. Accepts an array or a comma/semicolon
+// separated string. Invalid addresses are dropped loudly by the caller rather
+// than silently, so a typo can't quietly halve the recipient list.
+function parseExtraCc(raw) {
+  if (!raw) return [];
+  const parts = Array.isArray(raw) ? raw : String(raw).split(/[,;\s]+/);
+  return parts.map((x) => String(x).trim()).filter(Boolean);
+}
+
+function resolveRecipients(ticket, extraCc = []) {
   const pocEmail = (ticket.pocEmail || "").trim();
   if (!pocEmail || !isValidEmail(pocEmail)) {
     return { toList: [], ccList: [], missingReason: "pocEmail" };
@@ -736,7 +768,18 @@ function resolveRecipients(ticket) {
     ccList.push(DATA_INTEGRATIONS_CC);
   }
 
-  return { toList, ccList, missingReason: null };
+  // Operator-supplied extras last, so they can never displace the mandatory
+  // distro or the ticket owners. Deduped against everything already present.
+  const badExtraCc = [];
+  for (const raw of extraCc) {
+    if (!isValidEmail(raw)) { badExtraCc.push(raw); continue; }
+    const lower = raw.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    ccList.push(raw);
+  }
+
+  return { toList, ccList, missingReason: null, badExtraCc };
 }
 
 // ==========================================================================
