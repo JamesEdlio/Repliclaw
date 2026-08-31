@@ -28,7 +28,7 @@ import { randomFillSync } from "node:crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.3.6";
+const SKILL_VERSION = "0.3.7";
 const DATA_INTEGRATIONS_CC = "dataintegrations@edlio.com";
 const SFTP_HOST = "52.165.175.27";
 const SFTP_PORT = 22;
@@ -417,6 +417,20 @@ async function main() {
       ref: `op:item:${item.id}`,
       details: { vault: ONEPASSWORD_VAULT_LABEL, vault_id: ONEPASSWORD_VAULT, title: itemTitle },
     });
+
+    // Push the same password onto the FileMage SFTP user BEFORE we email the
+    // client. Without this the shared creds can never authenticate (the user
+    // was created keyless). Applies to reused users too. Hard-fails the run —
+    // mailing credentials that don't work is worse than reporting a failure.
+    if (fmUserId != null) {
+      await fileMageSetPassword({ userId: fmUserId, password });
+      recordAction({
+        type: "filemage.user.password",
+        status: "success",
+        ref: `filemage:user:${fmUserId}`,
+        details: { username },
+      });
+    }
 
     const shareRecipients = [...to, ...cc];
     const share = await opItemShare({
@@ -887,6 +901,37 @@ async function fileMageFindUser(username) {
   const body = await res.json();
   const users = Array.isArray(body) ? body : body.results || [];
   return users.find(u => u.username === username) || null;
+}
+
+async function fileMageSetPassword({ userId, password }) {
+  // FileMage users are created with NO password (keyless). The password we
+  // generate for the client must be pushed onto the user here, or the client
+  // gets creds that can never authenticate ("Access denied"). FileMage accepts
+  // the PUT silently either way, so guard hard on our side.
+  // CRITICAL: PUT must send the FULL current record (GET first, add password,
+  // PUT back) INCLUDING the `id` field. A PUT without `id` returns 200 but
+  // does NOT persist the password (learned live on user 472, Gorman ISD,
+  // 2026-08-31). FileMage also happily accepts an empty/short password with
+  // no validation — so the len>=12 guard stays on our side.
+  if (!password || password.length < 12) {
+    throw new Error("filemage setPassword: password shorter than 12 chars — refusing to PUT");
+  }
+  const getRes = await fetchT(fileMageUrl(`/users/${userId}/`), {
+    headers: fileMageHeaders(),
+  });
+  if (!getRes.ok) {
+    throw new Error(`filemage GET /users/${userId}/ -> HTTP ${getRes.status}`);
+  }
+  const record = await getRes.json();
+  record.password = password; // keep everything else, incl. id, intact
+  const putRes = await fetchT(fileMageUrl(`/users/${userId}/`), {
+    method: "PUT",
+    headers: fileMageHeaders(),
+    body: JSON.stringify(record),
+  }, FETCH_WRITE_TIMEOUT_MS);
+  if (!putRes.ok) {
+    throw new Error(`filemage PUT /users/${userId}/ -> HTTP ${putRes.status}: ${await putRes.text()}`);
+  }
 }
 
 async function fileMageCreateUser({ username, endpointName }) {

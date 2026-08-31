@@ -1,6 +1,6 @@
 ---
 name: app-sftp
-version: 0.3.6
+version: 0.3.7
 description: Send the App-SFTP setup email for a Forge ticket. Provisions a FileMage user (or reuses an existing one), stores credentials in 1Password, shares a 7-day credential link to the client POC, sends a setup email from edith@edlio.com, posts a confirmation comment on the Forge ticket, and transitions the ticket to INITIAL_CONTACT. Forge-native — reads and writes through Forge's API, never touches Jira.
 repliclawEnvelopeVersion: 0.2.0
 exec: ./run.mjs
@@ -428,3 +428,12 @@ See Repliclaw's `docs/AUTHORING.md`. Bump `version` on any behavior change. Add 
   Step is non-fatal (warns, never blocks the client email). Credentials read via
   the `op` service account, which can reach both `Agent: Edith` and
   `Agent: DI-Ana - SFTP` vaults.
+- **v0.3.7** (2026-08-31): Push the generated password onto the FileMage user
+  before emailing the client. Users were created keyless and the password only
+  ever lived in 1Password, so every dispatched district received credentials
+  that could never authenticate ("Access denied" on connect). New step
+  `filemage.user.password`: full-record GET→PUT (MUST keep `id` in the PUT
+  body — without it FileMage returns 200 and silently does nothing), guarded
+  len>=12, applies to new and reused users alike, hard-fails the run if the
+  PUT fails. Discovered via Gorman ISD (INT-161); swept and fixed 29 live
+  users (Gorman, Lockney by hand, 27 by sweep) — see notes/2026-08-31.
