@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.7.9";
+const SKILL_VERSION = "0.8.0";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -332,6 +332,30 @@ async function main() {
   const username = ctx.filemageUsernameOverride || deriveFileMageUsername(ticket.schoolName);
   let ftpAccount = await edlioFindFtpAccount(username);
   let ftpAccountCreated = false;
+  if (!ftpAccount && ctx.dryRun) {
+    // Dry run must not provision. A missing dashboard FTP account is the
+    // FIRST thing a dry run checks, and creating one here (a real, persistent
+    // duplicate) is exactly what dry_run exists to prevent — it happened on
+    // INT-173 2026-09-04 (dry dispatch minted ftp 237 alongside the real 236).
+    // Report what WOULD be created and stop: everything downstream (schema
+    // mapping, role config) needs the account to exist anyway.
+    const resolvedDry = await edlioResolveDistrictId(ticket.schoolName);
+    recordAction({
+      type: "edlio.ftp.create",
+      status: "skipped",
+      ref: `edlio:ftp:dryrun`,
+      details: {
+        dry_run: true,
+        would_create: username,
+        district_resolved: resolvedDry ? resolvedDry.districtId : null,
+      },
+    });
+    return done({
+      status_reason: "dry_run_no_ftp_account",
+      ticket: ticketSummary(ticket),
+      ftp_account: null,
+    }, "ok");
+  }
   if (!ftpAccount) {
     // No dashboard FTP account yet. SFTP files may already be landing on
     // FileMage, but with no Edlio FTP account nothing gets ingested (this is

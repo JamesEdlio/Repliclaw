@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.7.9
+version: 0.8.0
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -189,6 +189,21 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.8.0 — dry run no longer provisions a real FTP account (INT-173)
+- ROOT CAUSE: the FTP-account lookup/create path had no dry-run guard. On a
+  dry dispatch (INT-173, 2026-09-04) the account was missing, so the "dry" run
+  minted a real dashboard FTP account (id 237) alongside the real 236 — a
+  persistent duplicate, exactly what dry_run exists to prevent. Same class as
+  the 8/07 nested-`dry_run` bridge flag bug.
+- FIX: in dry run, a missing FTP account now reports `edlio.ftp.create
+  status=skipped (would_create=<username>)` and exits
+  `status_reason=dry_run_no_ftp_account` — no provisioning. Everything
+  downstream needs the account, so a dry run stops there honestly instead of
+  mutating and then skipping later steps.
+- Cleanup from the incident: duplicate acct 237 (Ruidoso, disabled, never
+  linked, no schema) deleted via DeleteFtpAccount; state verified back to
+  218 (legacy CMS) + 236 (new App feed, disabled).
 
 ### v0.7.9 — record-aware CSV parser (embedded-newline headers) + action-type fix
 - ROOT CAUSE (INT-033 NYOS): some SIS exports (Infinite Campus family) emit a
