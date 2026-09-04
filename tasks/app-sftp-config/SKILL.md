@@ -1,6 +1,6 @@
 ---
 name: app-sftp-config
-version: 0.8.0
+version: 0.8.1
 description: |
   Configure an Edlio dashboard FTP account end-to-end after the client has
   uploaded their first batch of CSVs. Fetches the Forge ticket, finds the
@@ -189,6 +189,14 @@ See `schema.json`. Notable fields:
 - `data.csvs[]` — per-file classification + column count
 - `data.role_mappings.<role>.{auto, low_confidence, missing_required}`
 - `data.needs_input` (only when status=needs_input)
+
+### v0.8.1 — force_rerun no longer bypasses the required-fields gate
+- BUG (found on INT-173 dry rerun): Path 2 (missing required fields) was
+  guarded by `&& !ctx.forceRerun`, so a force_rerun run with unmapped
+  required fields reported `configured` while role_mappings still showed
+  missing_required — "configured" lied. Per SKILL.md, force_rerun bypasses
+  the idempotency marker ONLY; Path 2's own comment says never write a
+  partial mapping. Removed the forceRerun exemption from the gate.
 
 ### v0.8.0 — dry run no longer provisions a real FTP account (INT-173)
 - ROOT CAUSE: the FTP-account lookup/create path had no dry-run guard. On a

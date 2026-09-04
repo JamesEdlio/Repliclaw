@@ -30,7 +30,7 @@ import { modelMapAll, modelMappingToRoleMapping } from "./lib/model-mapper.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SKILL_VERSION = "0.8.0";
+const SKILL_VERSION = "0.8.1";
 const TASK_NAME = "app-sftp-config";
 
 const SFTP_HOST = process.env.FILEMAGE_SFTP_HOST || "52.165.175.27";
@@ -891,8 +891,11 @@ async function main() {
   // Path 2 / apply guard: required fields still missing. Never write a partial
   // mapping to Edlio even if apply_mapping was set — re-park with the proposal
   // (if model) or the bare needs_input gate (alias-only) so the operator fixes
-  // the gap before anything is written.
-  if (rolesNeedingInput.length && !ctx.forceRerun) {
+  // the gap before anything is written. NOTE: force_rerun does NOT bypass this
+  // gate — it bypasses the idempotency marker only (per SKILL.md). Before
+  // v0.8.1 a force_rerun run with gaps sailed through to "configured",
+  // reporting missing required fields as done (seen on INT-173 dry run).
+  if (rolesNeedingInput.length) {
     if (usedModel) {
       return done({
         status_reason: "awaiting_mapping_approval",
